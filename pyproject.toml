@@ -1,0 +1,35 @@
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[project]
+name = "neurodash3"
+version = "0.0.1"
+description = "Dash-based neurobehavioral data explorer."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Eric Thomson" }]
+dependencies = [
+  # Core UI
+  "dash",
+  "plotly",
+  # Neural I/O
+  "neo",
+  "quantities",
+  # Signal processing
+  "lspopt",
+  "numpy",
+  "scipy",
+  # Behavioral I/O
+  "pandas",
+  "openpyxl",
+  # Video I/O (pyqtdash)
+  "imageio[ffmpeg,pyav]",
+  # pyqtdash viewer
+  "pyqt6",
+  "pyqtgraph",
+]
+
+[tool.uv.build-backend]
+module-root = "src"
