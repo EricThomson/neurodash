@@ -1,14 +1,12 @@
 # neurodash
-Lightweight dashboard-based exploratory analysis of neurobehavioral data.
+Lightweight browser-based exploratory analysis of neurobehavioral data.
 
 ## Setting up and running
 Make sure uv is installed.
-Create env:
 
-    uv venv --python 3.12
+    uv sync
     source .venv/Scripts/activate
 
-Install things withi uv sync 
 Or install neurodash with `uv pip install -e .`
 
 Run with `python app.py` and explore away!
