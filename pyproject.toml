@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build"]
+requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
 
 [project]
@@ -8,8 +8,11 @@ version = "0.0.1"
 description = "Web dashboard neurobehavioral data explorer."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
-authors = [{ name = "Eric Thomson" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "EricThomson", email = "thomson.eric@gmail.com" }
+]
 dependencies = [
   # Core UI
   "dash",
@@ -30,6 +33,9 @@ dependencies = [
   "pyqt6",
   "pyqtgraph",
 ]
+
+[project.urls]
+Repository = "https://github.com/EricThomson/neurodash"
 
 [tool.uv.build-backend]
 module-root = "src"
