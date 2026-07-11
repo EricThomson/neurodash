@@ -10,7 +10,11 @@ from pathlib import Path
 import numpy as np
 from dash import Input, Output, State, callback, clientside_callback, html, no_update
 
-from neurodash3.config import DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ, DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM
+from neurodash3.config import (
+    DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
+    DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
+    AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
+)
 from neurodash3.file_picker import pick_file
 from neurodash3.behavior_io import get_display_metadata
 from neurodash3.neural_io import get_analog_signal, extract_time_window
@@ -31,10 +35,15 @@ from neurodash3.session import load_session_from_paths, compute_spectrogram
     Output("dropdown-spectrogram-channel", "options"),
     Output("dropdown-spectrogram-channel", "value"),
     Input("btn-browse-neural", "n_clicks"),
-    prevent_initial_call=True,
 )
 def browse_neural(n_clicks):
-    path = pick_file("Select .pl2 file", "Plexon (*.pl2)", DEFAULT_FILE_DIR)
+    if not n_clicks:
+        # Initial page load — autoload the default file (temporary dev convenience).
+        if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_NEURAL_PATH).exists():
+            return (no_update,) * 7
+        path = AUTOLOAD_NEURAL_PATH
+    else:
+        path = pick_file("Select .pl2 file", "Plexon (*.pl2)", DEFAULT_FILE_DIR)
     if not path:
         return (no_update,) * 7
 
@@ -67,10 +76,15 @@ def browse_neural(n_clicks):
     Output("div-behavior-filename", "children"),
     Output("div-behavior-metadata", "children"),
     Input("btn-browse-behavior", "n_clicks"),
-    prevent_initial_call=True,
 )
 def browse_behavior(n_clicks):
-    path = pick_file("Select behavior file", "Excel (*.xlsx)", DEFAULT_FILE_DIR)
+    if not n_clicks:
+        # Initial page load — autoload the default file (temporary dev convenience).
+        if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_BEHAVIOR_PATH).exists():
+            return no_update, no_update, no_update
+        path = AUTOLOAD_BEHAVIOR_PATH
+    else:
+        path = pick_file("Select behavior file", "Excel (*.xlsx)", DEFAULT_FILE_DIR)
     if not path:
         return no_update, no_update, no_update
 
@@ -229,7 +243,6 @@ clientside_callback(
     Input("input-spect-c-param", "value"),
     Input("input-spect-max-freq", "value"),
     State("store-view-range", "data"),
-    prevent_initial_call=True,
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   spect_channel, spect_window, spect_step, spect_c, spect_max_freq,

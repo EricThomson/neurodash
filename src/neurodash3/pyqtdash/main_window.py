@@ -13,6 +13,7 @@ Handoff directory contents:
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,10 @@ _SCALE_X = 0.8002
 _SCALE_Y = 1.0411
 _OFFSET_X = 46.4
 _OFFSET_Y = -22.9
+
+# Max frames to decode-and-discard forward before preferring a seek. Keeps 2×
+# playback and short forward scrubs on the cheap sequential decode path.
+_MAX_SEQ_SKIP = 15
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +242,18 @@ class NeurodashViewer(QMainWindow):
         slider_controls_layout.addWidget(left, stretch=1)
 
         # Playback timer — advances one frame per tick at real-time fps.
-        # PreciseTimer keeps tick spacing near the true 33 ms on Windows, where
-        # the default coarse timer snaps to ~15.6 ms and staggers playback.
         self.play_timer = QTimer(self)
-        self.play_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.play_timer.timeout.connect(self._advance_frame)
         self._play_interval_ms = max(1, round(1000 / self.fps))
+        # Wall-clock playback state (initialized here, before the initial
+        # slider.setValue below fires on_slider_changed). Playback derives the
+        # target frame from elapsed real time * speed and drops frames when
+        # rendering can't keep up, so 1× / 2× stay true to the wall clock instead
+        # of sliding into slow motion.
+        self._play_speed = 1.0       # 1.0 (1×) or 2.0 (2×)
+        self._play_t0 = None         # perf_counter latched at play start
+        self._play_start_idx = 0     # slider index latched at play start
+        self._advancing = False      # our own slider writes vs. a user scrub
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -264,6 +275,9 @@ class NeurodashViewer(QMainWindow):
         self.zoom_checkbox.setChecked(True)
         self.zoom_checkbox.stateChanged.connect(self.on_zoom_mode_changed)
         controls_row_layout.addWidget(self.zoom_checkbox)
+        self.speed_checkbox = QCheckBox("2×")
+        self.speed_checkbox.stateChanged.connect(self.on_speed_changed)
+        controls_row_layout.addWidget(self.speed_checkbox)
         right_layout.addWidget(controls_row)
         slider_controls_layout.addWidget(right)
 
@@ -274,6 +288,12 @@ class NeurodashViewer(QMainWindow):
             self.lfp_plot.setLabel("left", "Amplitude (mV)")
             self.lfp_plot.setLabel("bottom", "Time (s)")
             self.lfp_plot.addLegend(offset=(-1, 1), brush=pg.mkBrush(50, 50, 50, 200))
+            # Render fix: clip each LFP curve to the visible window and decimate to
+            # ~screen resolution instead of re-rasterizing all ~480k points/channel on
+            # every frame. Profiled: cuts show_frame ~60ms -> ~30ms, so 1x plays at
+            # real time. 'peak' keeps the min/max envelope so oscillations read right.
+            self.lfp_plot.setClipToView(True)
+            self.lfp_plot.setDownsampling(auto=True, mode="peak")
 
             for i, trace in enumerate(self.lfp_traces):
                 name = self.ch_names[i] if i < len(self.ch_names) else f"Ch {i+1}"
@@ -351,10 +371,18 @@ class NeurodashViewer(QMainWindow):
         (playback), pull the next decoded frame. Slow path: on a jump/scrub,
         seek to the nearest keyframe and decode forward to the exact frame.
         """
-        if self._decode_gen is not None and video_idx == self._decode_next_idx:
-            frame = next(self._decode_gen, None)
-            if frame is not None:
+        # Fast path: continue the current decode sequence, decoding and
+        # discarding forward across small gaps so 2× playback and short forward
+        # scrubs stay off the seek path.
+        if (self._decode_gen is not None
+                and self._decode_next_idx <= video_idx <= self._decode_next_idx + _MAX_SEQ_SKIP):
+            frame = None
+            while self._decode_next_idx <= video_idx:
+                frame = next(self._decode_gen, None)
+                if frame is None:
+                    break
                 self._decode_next_idx += 1
+            if frame is not None:
                 return frame.to_ndarray(format="rgb24")
 
         stream = self._video_stream
@@ -423,6 +451,12 @@ class NeurodashViewer(QMainWindow):
 
     def on_slider_changed(self, behavior_idx):
         self.show_frame(behavior_idx)
+        # If the user scrubbed while playing, re-baseline the wall clock to the
+        # new position so the next tick continues from here instead of yanking
+        # the slider back. (_advancing marks our own writes so they don't count.)
+        if self.play_timer.isActive() and not self._advancing:
+            self._play_start_idx = behavior_idx
+            self._play_t0 = time.perf_counter()
 
     def on_play_clicked(self, checked):
         if checked:
@@ -430,10 +464,23 @@ class NeurodashViewer(QMainWindow):
         else:
             self._stop_playback()
 
+    def on_speed_changed(self):
+        # Apply the new rate from now forward — re-baseline so already-elapsed
+        # time isn't retroactively rescaled (which would jump the playhead).
+        if self.play_timer.isActive():
+            self._play_start_idx = self.slider.value()
+            self._play_t0 = time.perf_counter()
+        self._play_speed = 2.0 if self.speed_checkbox.isChecked() else 1.0
+
     def _start_playback(self):
         # Restart from the beginning if we're parked at the last frame
         if self.slider.value() >= self.slider.maximum():
             self.slider.setValue(0)
+        # Latch the wall-clock baseline. Re-latching on every start also makes
+        # resume-after-pause correct — the paused seconds are excluded.
+        self._play_speed = 2.0 if self.speed_checkbox.isChecked() else 1.0
+        self._play_start_idx = self.slider.value()
+        self._play_t0 = time.perf_counter()
         self.play_button.setChecked(True)
         self.play_button.setText("⏸ Pause")
         self.play_timer.start(self._play_interval_ms)
@@ -444,11 +491,34 @@ class NeurodashViewer(QMainWindow):
         self.play_button.setText("▶ Play")
 
     def _advance_frame(self):
-        idx = self.slider.value()
-        if idx >= self.slider.maximum():
+        # Wall-clock target: the frame the elapsed real time says we should be on.
+        # Jump straight there and drop the intermediate paints, so playback holds
+        # true speed instead of falling behind when a frame can't paint in time.
+        elapsed = time.perf_counter() - self._play_t0
+        target = self._play_start_idx + round(elapsed * self._play_speed * self.fps)
+        max_idx = self.slider.maximum()
+        if target >= max_idx:
+            self._set_slider(max_idx)
             self._stop_playback()
             return
-        self.slider.setValue(idx + 1)  # fires on_slider_changed -> show_frame
+        if target <= self.slider.value():
+            return  # not due yet (the timer can poll faster than frames fall due)
+        # Safety belt: never jump past the sequential-decode window onto the
+        # keyframe-seek path (a pathological stall would thrash). Snap to the
+        # reachable frame and re-baseline so time-debt can't accumulate.
+        reachable = self.slider.value() + _MAX_SEQ_SKIP
+        if target > reachable:
+            target = reachable
+            self._play_start_idx = target
+            self._play_t0 = time.perf_counter()
+        self._set_slider(target)
+
+    def _set_slider(self, value):
+        # Guarded write so on_slider_changed can tell our playback writes from a
+        # real user scrub; setValue fires on_slider_changed -> show_frame.
+        self._advancing = True
+        self.slider.setValue(value)
+        self._advancing = False
 
     def closeEvent(self, event):
         """Clean up handoff directory on close."""
