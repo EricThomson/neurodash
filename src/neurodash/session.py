@@ -1,4 +1,4 @@
-"""Central session object and file-loading machinery for neurodash3.
+"""Central session object and file-loading machinery for neurodash.
 
 A Session holds all loaded data for one recording — neural, behavioral, or both.
 Files are loaded directly from filesystem paths — no copying.
@@ -10,9 +10,9 @@ Python process so module-level lru_cache works fine.
 from functools import lru_cache
 from pathlib import Path
 
-from neurodash3.neural_io import load_pl2_block, list_analog_signal_summaries, get_analog_signal, extract_time_window
-from neurodash3.spectral_utils import compute_multitaper_spectrogram
-from neurodash3.behavior_io import load_behavior_file
+from neurodash.neural_io import load_pl2_block, list_analog_signal_summaries, get_analog_signal, extract_time_window
+from neurodash.spectral_utils import compute_multitaper_spectrogram
+from neurodash.behavior_io import load_behavior_file
 
 
 class Session:

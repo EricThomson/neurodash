@@ -3,9 +3,9 @@ requires = ["uv_build"]
 build-backend = "uv_build"
 
 [project]
-name = "neurodash3"
+name = "neurodash"
 version = "0.0.1"
-description = "Dash-based neurobehavioral data explorer."
+description = "Web dashboard neurobehavioral data explorer."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }

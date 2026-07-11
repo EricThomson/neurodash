@@ -379,7 +379,7 @@ wheels = [
 ]
 
 [[package]]
-name = "neurodash3"
+name = "neurodash"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [

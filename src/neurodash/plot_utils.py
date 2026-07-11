@@ -1,4 +1,4 @@
-"""Plotting functions for neurodash3 session views.
+"""Plotting functions for neurodash session views.
 
 Produces figures for the main panel. Takes a Session and controls
 dict — no knowledge of UI state or data loading.
@@ -8,9 +8,9 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from neurodash3.neural_io import get_analog_signal, extract_time_window
-from neurodash3.behavior_io import extract_position
-from neurodash3.session import compute_spectrogram
+from neurodash.neural_io import get_analog_signal, extract_time_window
+from neurodash.behavior_io import extract_position
+from neurodash.session import compute_spectrogram
 
 
 def plot_behavior_view(session):

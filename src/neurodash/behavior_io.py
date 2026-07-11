@@ -1,5 +1,5 @@
 """
-behavior_io.py — EthoVision behavioral data loading for neurodash3.
+behavior_io.py — EthoVision behavioral data loading for neurodash.
 
 Loads EthoVision Excel exports and provides position/motion extraction
 and neural sync utilities.

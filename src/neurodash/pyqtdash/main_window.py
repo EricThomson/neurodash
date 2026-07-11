@@ -1,7 +1,7 @@
 """
-main_window.py — neurodash3 video viewer.
+main_window.py — neurodash video viewer.
 
-Receives a handoff directory from neurodash3 containing pre-serialized arrays
+Receives a handoff directory from neurodash containing pre-serialized arrays
 and metadata. Displays synchronized video, behavioral traces, LFP, and
 spectrogram. No data loading or computation — just display.
 
@@ -28,8 +28,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 
-from neurodash3.plot_utils import velocity_ylim
-from neurodash3.behavior_io import (
+from neurodash.plot_utils import velocity_ylim
+from neurodash.behavior_io import (
     load_behavior_file, get_recording_delay, estimate_position_pixels
 )
 
@@ -73,7 +73,7 @@ def _estimate_position_pixels(x, y, video_width, video_height):
 class NeurodashViewer(QMainWindow):
     def __init__(self, handoff_dir: str):
         super().__init__()
-        self.setWindowTitle("neurodash3 viewer")
+        self.setWindowTitle("neurodash viewer")
         self._handoff_dir = handoff_dir
 
         # Load handoff metadata

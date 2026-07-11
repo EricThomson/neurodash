@@ -1,5 +1,5 @@
 """
-file_picker.py — native OS file dialog for neurodash3.
+file_picker.py — native OS file dialog for neurodash.
 
 Why this exists:
     Dash runs in a browser. Browsers cannot access the filesystem for
@@ -13,7 +13,7 @@ Why this exists:
     On Windows, SetForegroundWindow forces the dialog in front of the browser.
 
 Usage from Dash callback:
-    from neurodash3.file_picker import pick_file
+    from neurodash.file_picker import pick_file
     path = pick_file("Select .pl2 file", "Plexon (*.pl2)")
 """
 

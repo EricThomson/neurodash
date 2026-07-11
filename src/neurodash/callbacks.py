@@ -1,4 +1,4 @@
-"""Dash callbacks for neurodash3."""
+"""Dash callbacks for neurodash."""
 
 import json
 import shutil
@@ -10,16 +10,16 @@ from pathlib import Path
 import numpy as np
 from dash import Input, Output, State, callback, clientside_callback, html, no_update
 
-from neurodash3.config import (
+from neurodash.config import (
     DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
 )
-from neurodash3.file_picker import pick_file
-from neurodash3.behavior_io import get_display_metadata
-from neurodash3.neural_io import get_analog_signal, extract_time_window
-from neurodash3.plot_utils import normalize_lfp_traces, plot_session_view
-from neurodash3.session import load_session_from_paths, compute_spectrogram
+from neurodash.file_picker import pick_file
+from neurodash.behavior_io import get_display_metadata
+from neurodash.neural_io import get_analog_signal, extract_time_window
+from neurodash.plot_utils import normalize_lfp_traces, plot_session_view
+from neurodash.session import load_session_from_paths, compute_spectrogram
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +355,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         shutil.rmtree(_last_handoff_dir, ignore_errors=True)
 
     # Create handoff directory
-    handoff_dir = tempfile.mkdtemp(prefix="neurodash3_handoff_")
+    handoff_dir = tempfile.mkdtemp(prefix="neurodash_handoff_")
     _last_handoff_dir = handoff_dir
 
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
@@ -423,7 +423,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         json.dump(handoff, f)
 
     _viewer_process = subprocess.Popen(
-        [sys.executable, "-m", "neurodash3.pyqtdash.launch", "--handoff", handoff_dir],
+        [sys.executable, "-m", "neurodash.pyqtdash.launch", "--handoff", handoff_dir],
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     return "", video_path, Path(video_path).name, "Relaunch viewer"

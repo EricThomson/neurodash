@@ -1,8 +1,8 @@
-"""Dash layout for neurodash3."""
+"""Dash layout for neurodash."""
 
 from dash import dcc, html
 
-from neurodash3.config import (
+from neurodash.config import (
     APP_TITLE,
     DEFAULT_VIEW_DURATION,
     DEFAULT_SPECT_MAX_FREQ,

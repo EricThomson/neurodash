@@ -1,7 +1,7 @@
-"""Central configuration and default parameters for neurodash3."""
+"""Central configuration and default parameters for neurodash."""
 
 
-APP_TITLE = "neurodash3"
+APP_TITLE = "neurodash"
 
 # Default starting directory for file picker dialogs
 DEFAULT_FILE_DIR = "C:/Users/Eric/data/fear/plexon"
