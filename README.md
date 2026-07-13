@@ -1,4 +1,5 @@
 # neurodash
+<img src="https://raw.githubusercontent.com/EricThomson/neurodash/main/src/neurodash/assets/logo/neurodash_logo_trimmed.png" alt="neurodash logo" align="right" width="250">
 Lightweight dashboard for exploratory analysis of neurobehavioral data.
 
 ## Setting up and running
