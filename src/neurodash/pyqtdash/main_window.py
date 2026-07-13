@@ -202,51 +202,54 @@ class NeurodashViewer(QMainWindow):
             self.vel_plot.addItem(self.vel_cursor)
             behav_layout.addWidget(self.vel_plot)
 
-        # Slider row
+        # Slider controls — three stacked rows:
+        #   1) time label   2) play + 2× + scrub slider   3) window + zoom
         slider_row = QWidget()
         slider_layout = QVBoxLayout(slider_row)
+        slider_layout.setContentsMargins(0, 0, 0, 0)
+        slider_layout.setSpacing(4)
         root.addWidget(slider_row)
 
-        slider_controls = QWidget()
-        slider_controls_layout = QHBoxLayout(slider_controls)
-        slider_controls_layout.setContentsMargins(0, 0, 0, 0)
-        slider_layout.addWidget(slider_controls)
-
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(2)
-
+        # Row 1: time label
         self.time_label = QLabel("t = 0.00 s  |  frame 0")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        left_layout.addWidget(self.time_label)
+        slider_layout.addWidget(self.time_label)
 
-        # Transport row: [play button / 2× stacked] + scrub slider
-        transport = QWidget()
-        transport_layout = QHBoxLayout(transport)
+        # Row 2: play | 2× | scrub slider
+        transport_layout = QHBoxLayout()
         transport_layout.setContentsMargins(0, 0, 0, 0)
-
-        play_col = QVBoxLayout()
-        play_col.setContentsMargins(0, 0, 0, 0)
-        play_col.setSpacing(2)
         self.play_button = QPushButton("▶ Play")
         self.play_button.setCheckable(True)
         self.play_button.clicked.connect(self.on_play_clicked)
-        play_col.addWidget(self.play_button)
+        transport_layout.addWidget(self.play_button)
         self.speed_checkbox = QCheckBox("2×")
         self.speed_checkbox.stateChanged.connect(self.on_speed_changed)
-        play_col.addWidget(self.speed_checkbox)
-        transport_layout.addLayout(play_col)
-
+        transport_layout.addWidget(self.speed_checkbox)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(self.n_frames - 1)
         self.slider.setValue(0)
         self.slider.valueChanged.connect(self.on_slider_changed)
         transport_layout.addWidget(self.slider, stretch=1)
+        slider_layout.addLayout(transport_layout)
 
-        left_layout.addWidget(transport)
-        slider_controls_layout.addWidget(left, stretch=1)
+        # Row 3: window duration + zoom toggle (left-packed)
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.addWidget(QLabel("Window (s):"))
+        self.window_spinbox = QDoubleSpinBox()
+        self.window_spinbox.setMinimum(1.0)
+        self.window_spinbox.setMaximum(300.0)
+        self.window_spinbox.setSingleStep(5.0)
+        self.window_spinbox.setValue(window_duration)
+        self.window_spinbox.valueChanged.connect(self.on_window_duration_changed)
+        controls_layout.addWidget(self.window_spinbox)
+        self.zoom_checkbox = QCheckBox("Zoom")
+        self.zoom_checkbox.setChecked(True)
+        self.zoom_checkbox.stateChanged.connect(self.on_zoom_mode_changed)
+        controls_layout.addWidget(self.zoom_checkbox)
+        controls_layout.addStretch(1)
+        slider_layout.addLayout(controls_layout)
 
         # Playback timer — advances one frame per tick at real-time fps.
         self.play_timer = QTimer(self)
@@ -261,29 +264,6 @@ class NeurodashViewer(QMainWindow):
         self._play_t0 = None         # perf_counter latched at play start
         self._play_start_idx = 0     # slider index latched at play start
         self._advancing = False      # our own slider writes vs. a user scrub
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(2)
-
-        controls_row = QWidget()
-        controls_row_layout = QHBoxLayout(controls_row)
-        controls_row_layout.setContentsMargins(0, 0, 0, 0)
-        controls_row_layout.addWidget(QLabel("Window (s):"))
-        self.window_spinbox = QDoubleSpinBox()
-        self.window_spinbox.setMinimum(1.0)
-        self.window_spinbox.setMaximum(300.0)
-        self.window_spinbox.setSingleStep(5.0)
-        self.window_spinbox.setValue(window_duration)
-        self.window_spinbox.valueChanged.connect(self.on_window_duration_changed)
-        controls_row_layout.addWidget(self.window_spinbox)
-        self.zoom_checkbox = QCheckBox("Zoom")
-        self.zoom_checkbox.setChecked(True)
-        self.zoom_checkbox.stateChanged.connect(self.on_zoom_mode_changed)
-        controls_row_layout.addWidget(self.zoom_checkbox)
-        right_layout.addWidget(controls_row)
-        slider_controls_layout.addWidget(right)
 
         # LFP
         if has_neural:

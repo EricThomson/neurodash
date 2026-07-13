@@ -16,6 +16,3 @@ Run with `python app.py` and explore away! Assumes you have neural data in plexo
   - explain back-end stuff like channels/streaming neo/plx
 - Testing, linting, etc
   
-
-### Questions
-- Channel names: Ch 17 or AI17 (latter is plexon name). Currentlyl using actual plexon channel names. 
