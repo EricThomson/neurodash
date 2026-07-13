@@ -221,15 +221,22 @@ class NeurodashViewer(QMainWindow):
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         left_layout.addWidget(self.time_label)
 
-        # Transport row: play/pause button + scrub slider
+        # Transport row: [play button / 2× stacked] + scrub slider
         transport = QWidget()
         transport_layout = QHBoxLayout(transport)
         transport_layout.setContentsMargins(0, 0, 0, 0)
 
+        play_col = QVBoxLayout()
+        play_col.setContentsMargins(0, 0, 0, 0)
+        play_col.setSpacing(2)
         self.play_button = QPushButton("▶ Play")
         self.play_button.setCheckable(True)
         self.play_button.clicked.connect(self.on_play_clicked)
-        transport_layout.addWidget(self.play_button)
+        play_col.addWidget(self.play_button)
+        self.speed_checkbox = QCheckBox("2×")
+        self.speed_checkbox.stateChanged.connect(self.on_speed_changed)
+        play_col.addWidget(self.speed_checkbox)
+        transport_layout.addLayout(play_col)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
@@ -275,9 +282,6 @@ class NeurodashViewer(QMainWindow):
         self.zoom_checkbox.setChecked(True)
         self.zoom_checkbox.stateChanged.connect(self.on_zoom_mode_changed)
         controls_row_layout.addWidget(self.zoom_checkbox)
-        self.speed_checkbox = QCheckBox("2×")
-        self.speed_checkbox.stateChanged.connect(self.on_speed_changed)
-        controls_row_layout.addWidget(self.speed_checkbox)
         right_layout.addWidget(controls_row)
         slider_controls_layout.addWidget(right)
 

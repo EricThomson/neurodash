@@ -1,5 +1,5 @@
 # neurodash
-Lightweight browser-based exploratory analysis of neurobehavioral data.
+Lightweight dashboard for exploratory analysis of neurobehavioral data.
 
 ## Setting up and running
 Make sure uv is installed.
@@ -7,10 +7,7 @@ Make sure uv is installed.
     uv sync
     source .venv/Scripts/activate
 
-Or install neurodash with `uv pip install -e .`
-
-Run with `python app.py` and explore away!
-
+Run with `python app.py` and explore away! Assumes you have neural data in plexon, and behavioral data in Excel. 
 
 ## To do
 - export csv/png
