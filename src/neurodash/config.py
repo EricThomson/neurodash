@@ -18,6 +18,11 @@ DEFAULT_SPECT_WINDOW_SEC = 2.0
 DEFAULT_SPECT_STEP_SEC = 0.1
 DEFAULT_SPECT_C_PARAM = 20
 
+# Channel QC
+QC_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
+QC_ROW_HEIGHT = 160  # px per channel row in the combined QC figure
+EXEMPLAR_SEEDS_DEFAULT_CHANNEL = True  # exemplar seeds the viewer's default channel
+
 # ---------------------------------------------------------------------------
 # TEMPORARY dev convenience: autoload these files on startup so you don't have
 # to browse for them every run. Flip AUTOLOAD_ON_STARTUP to False to disable,

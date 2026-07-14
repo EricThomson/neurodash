@@ -8,6 +8,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from neurodash import config
 from neurodash.neural_io import get_analog_signal, extract_time_window
 from neurodash.behavior_io import extract_position
 from neurodash.session import compute_spectrogram
@@ -311,3 +312,94 @@ def _plot_velocity(fig, row, session, controls):
         range=list(velocity_ylim(v)), fixedrange=True,
         row=row, col=1,
     )
+
+
+# ---------------------------------------------------------------------------
+# Channel QC — one combined figure for all channels (own lazy-rendered view)
+# ---------------------------------------------------------------------------
+
+def plot_qc_figure(session, view_range=None, spect_params=None):
+    """Combined QC figure: raw LFP (col 1) + spectrogram (col 2) per channel.
+
+    All x-axes are linked (matches='x') so panning/zooming one panel moves every
+    panel together — the single-figure sync the Session Viewer uses. One figure
+    is one WebGL context regardless of channel count, so full-resolution traces
+    stay crisp at any zoom without a per-channel WebGL-context limit.
+
+    view_range, if given, sets the initial [t0, t1] window (else shows the full
+    recording). spect_params (window/step/c/max_freq) tunes the spectrograms;
+    missing keys fall back to config.DEFAULT_SPECT_*.
+    """
+    sig_info = session.analog_signal_summaries[0]
+    channel_indices = sig_info["channel_indices"]
+    channel_labels = sig_info["channel_labels"]
+    full_duration = sig_info["duration_sec"]
+    n = len(channel_indices)
+    sig = get_analog_signal(session.block, 0)
+
+    sp = spect_params or {}
+    window = sp.get("window") or config.DEFAULT_SPECT_WINDOW_SEC
+    step = sp.get("step") or config.DEFAULT_SPECT_STEP_SEC
+    c_param = sp.get("c") or config.DEFAULT_SPECT_C_PARAM
+    max_freq = sp.get("max_freq") or config.DEFAULT_SPECT_MAX_FREQ
+
+    fig = make_subplots(
+        rows=n, cols=2,
+        column_widths=[0.5, 0.5],
+        vertical_spacing=0.0,   # contiguous rows so the controls gutter aligns
+        horizontal_spacing=0.06,
+    )
+
+    for i, ch in enumerate(channel_indices):
+        row = i + 1
+        # --- raw LFP (col 1): full-resolution, normalized like the main viewer
+        t, y, _ = extract_time_window(sig, ch, 0, full_duration)
+        normalized, y_range = normalize_lfp_traces([y])
+        fig.add_trace(
+            go.Scattergl(x=t, y=normalized[0], mode="lines",
+                         line=dict(width=0.7, color="#1f77b4")),
+            row=row, col=1,
+        )
+        fig.update_yaxes(title_text=channel_labels[ch], showticklabels=False,
+                         range=list(y_range), fixedrange=True, row=row, col=1)
+
+        # --- spectrogram (col 2): full recording, cached
+        try:
+            freqs, times, power_db = compute_spectrogram(
+                str(session.pl2_path), 0, ch, 0, full_duration,
+                max_freq, window, step, c_param,
+            )
+            fig.add_trace(
+                go.Heatmap(x=times, y=freqs, z=power_db,
+                           colorscale="Inferno", showscale=False),
+                row=row, col=2,
+            )
+        except Exception as e:
+            print(f"QC spectrogram error ch{ch}: {e}")
+        fig.update_yaxes(title_text="Hz", range=[0, max_freq],
+                         fixedrange=True, row=row, col=2)
+
+    # Link every x-axis to the anchor so all panels pan/zoom together.
+    for r in range(1, n + 1):
+        for c in (1, 2):
+            if r == 1 and c == 1:
+                continue
+            fig.update_xaxes(matches='x', row=r, col=c)
+    # Only the bottom row shows time ticks.
+    for r in range(1, n):
+        fig.update_xaxes(showticklabels=False, row=r, col=1)
+        fig.update_xaxes(showticklabels=False, row=r, col=2)
+    fig.update_xaxes(title_text="Time (s)", row=n, col=1)
+    fig.update_xaxes(title_text="Time (s)", row=n, col=2)
+
+    if view_range:
+        fig.update_xaxes(range=list(view_range), autorange=False)
+
+    fig.update_layout(
+        height=config.QC_ROW_HEIGHT * n + 50,  # + top/bottom margins below
+        margin=dict(l=50, r=10, t=10, b=40),
+        dragmode="pan",
+        showlegend=False,
+        hovermode=False,
+    )
+    return fig

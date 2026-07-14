@@ -8,18 +8,23 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from dash import Input, Output, State, callback, clientside_callback, html, no_update
+from dash import (
+    Input, Output, State, ALL, callback, clientside_callback, ctx, dcc, html, no_update,
+)
 
 from neurodash.config import (
     DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
+    EXEMPLAR_SEEDS_DEFAULT_CHANNEL,
 )
 from neurodash.file_picker import pick_file
 from neurodash.behavior_io import get_display_metadata
 from neurodash.neural_io import get_analog_signal, extract_time_window
-from neurodash.plot_utils import normalize_lfp_traces, plot_session_view
+from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_qc_figure
 from neurodash.session import load_session_from_paths, compute_spectrogram
+from neurodash.qc_io import load_qc, save_qc, qc_to_dataframe
+from neurodash.layout import build_qc_view, exemplar_glyph, exemplar_button_style
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +73,15 @@ def browse_neural(n_clicks):
         html.Div(f"Channels: {sig_info['n_channels']}"),
     ])
 
-    return path, Path(path).name, metadata, options, [0], options, 0
+    # Seed the default selected channel from a saved QC exemplar (if any).
+    default_channel = 0
+    if EXEMPLAR_SEEDS_DEFAULT_CHANNEL:
+        ex = load_qc(path, session).get("exemplar_channel_index")
+        if ex is not None and 0 <= ex < sig_info["n_channels"]:
+            default_channel = ex
+
+    return (path, Path(path).name, metadata, options,
+            [default_channel], options, default_channel)
 
 
 @callback(
@@ -141,6 +154,23 @@ clientside_callback(
 )
 
 
+# Panning/zooming the combined QC figure updates the same shared window.
+clientside_callback(
+    """
+    function(relayoutData) {
+        if (!relayoutData) return window.dash_clientside.no_update;
+        var x0 = relayoutData["xaxis.range[0]"];
+        var x1 = relayoutData["xaxis.range[1]"];
+        if (x0 != null && x1 != null) return [x0, x1];
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("store-view-range", "data", allow_duplicate=True),
+    Input("qc-plot", "relayoutData"),
+    prevent_initial_call=True,
+)
+
+
 # ---------------------------------------------------------------------------
 # Sync view start back to time input
 # ---------------------------------------------------------------------------
@@ -169,13 +199,23 @@ clientside_callback(
 
 clientside_callback(
     """
-    function(toggleValue) {
-        var show = toggleValue && toggleValue.indexOf("on") !== -1;
-        return {"display": show ? "block" : "none"};
+    function(toggleValue, tabValue) {
+        var toggled = toggleValue && toggleValue.indexOf("on") !== -1;
+        var onQC = tabValue === "qc";
+        /* Params: shown when the Session Viewer spectrogram is on, and always
+           on the Channel Viewer. Channel selector: Session Viewer only. */
+        var showParams = toggled || onQC;
+        var showChannel = toggled && !onQC;
+        return [
+            {"display": showParams ? "block" : "none"},
+            {"display": showChannel ? "block" : "none"}
+        ];
     }
     """,
     Output("div-spectrogram-controls", "style"),
+    Output("div-spect-channel-select", "style"),
     Input("toggle-spectrogram", "value"),
+    Input("tabs-main", "value"),
     prevent_initial_call=True,
 )
 
@@ -212,6 +252,10 @@ clientside_callback(
         var graphDiv = document.querySelector("#main-plot .js-plotly-plot");
         if (graphDiv) {
             Plotly.relayout(graphDiv, {"xaxis.range": [x0, x1], "xaxis.autorange": false});
+        }
+        var qcDiv = document.querySelector("#qc-plot .js-plotly-plot");
+        if (qcDiv) {
+            Plotly.relayout(qcDiv, {"xaxis.range": [x0, x1], "xaxis.autorange": false});
         }
 
         return [x0, x1];
@@ -427,3 +471,190 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     return "", video_path, Path(video_path).name, "Relaunch viewer"
+
+
+# ---------------------------------------------------------------------------
+# Channel QC — tab switching, lazy grid render, annotation persistence
+# ---------------------------------------------------------------------------
+
+# Show the active tab's content pane, hide the other (both stay mounted so the
+# main-plot figure + viewport survive a tab switch).
+clientside_callback(
+    """
+    function(tabValue) {
+        var showQC = tabValue === "qc";
+        return [
+            {"display": showQC ? "none" : "block"},
+            {"display": showQC ? "block" : "none"}
+        ];
+    }
+    """,
+    Output("div-viewer-content", "style"),
+    Output("div-qc-wrap", "style"),
+    Input("tabs-main", "value"),
+)
+
+
+def _spect_params(window, step, c, max_freq):
+    return {"window": window, "step": step, "c": c, "max_freq": max_freq}
+
+
+@callback(
+    Output("qc-content", "children"),
+    Output("store-qc-exemplar", "data"),
+    Input("tabs-main", "value"),
+    State("store-neural-path", "data"),
+    State("store-view-range", "data"),
+    State("input-spect-window", "value"),
+    State("input-spect-step", "value"),
+    State("input-spect-c-param", "value"),
+    State("input-spect-max-freq", "value"),
+    prevent_initial_call=True,
+)
+def render_qc_tab(tab_value, neural_path, view_range,
+                  spect_window, spect_step, spect_c, spect_max_freq):
+    """Lazily build the QC view when the QC tab is opened, at the current window."""
+    if tab_value != "qc":
+        return no_update, no_update
+    if not neural_path:
+        return html.Div("Load neural data to review channels.",
+                        style={"color": "#999", "padding": "20px"}), no_update
+
+    session = load_session_from_paths(neural_path, "")
+    qc_data = load_qc(session.pl2_path, session)
+    params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
+    return (build_qc_view(session, qc_data, view_range, params),
+            qc_data.get("exemplar_channel_index"))
+
+
+@callback(
+    Output("qc-plot", "figure"),
+    Input("input-spect-window", "value"),
+    Input("input-spect-step", "value"),
+    Input("input-spect-c-param", "value"),
+    Input("input-spect-max-freq", "value"),
+    State("tabs-main", "value"),
+    State("store-neural-path", "data"),
+    State("store-view-range", "data"),
+    prevent_initial_call=True,
+)
+def update_qc_spectrograms(spect_window, spect_step, spect_c, spect_max_freq,
+                           tab_value, neural_path, view_range):
+    """Rebuild the QC figure when a spectrogram control changes (QC tab only).
+
+    Only the figure is rebuilt — the controls gutter and its state are untouched.
+    The current window is preserved.
+    """
+    if tab_value != "qc" or not neural_path:
+        return no_update
+    session = load_session_from_paths(neural_path, "")
+    params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
+    return plot_qc_figure(session, view_range, params)
+
+
+@callback(
+    Output("store-qc-exemplar", "data", allow_duplicate=True),
+    Input({"type": "qc-exemplar", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def set_exemplar(_n_clicks):
+    """A star click sets the single exemplar channel (index in the store)."""
+    triggered = ctx.triggered_id
+    if not triggered:
+        return no_update
+    # Ignore the n_clicks=0 population that fires when the grid first mounts.
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+    return triggered["index"]
+
+
+@callback(
+    Output({"type": "qc-exemplar", "index": ALL}, "children"),
+    Output({"type": "qc-exemplar", "index": ALL}, "style"),
+    Input("store-qc-exemplar", "data"),
+    State({"type": "qc-exemplar", "index": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def refresh_exemplar_stars(exemplar_idx, ids):
+    """Keep the ★/☆ glyphs in sync with the current exemplar."""
+    glyphs, styles = [], []
+    for id_ in ids:
+        is_ex = id_["index"] == exemplar_idx
+        glyphs.append(exemplar_glyph(is_ex))
+        styles.append(exemplar_button_style(is_ex))
+    return glyphs, styles
+
+
+@callback(
+    Output("div-qc-save-status", "children"),
+    Input({"type": "qc-quality", "index": ALL}, "value"),
+    Input({"type": "qc-comment", "index": ALL}, "value"),
+    Input("store-qc-exemplar", "data"),
+    State({"type": "qc-quality", "index": ALL}, "id"),
+    State({"type": "qc-comment", "index": ALL}, "id"),
+    State("store-neural-path", "data"),
+    prevent_initial_call=True,
+)
+def save_qc_edits(qualities, comments, exemplar_idx, quality_ids, comment_ids, neural_path):
+    """Persist the whole QC record whenever a rating/comment/exemplar changes.
+
+    Rebuilds from the UI (which holds the complete state) and writes only when
+    something actually differs from the sidecar — so re-opening the QC tab, which
+    re-fires these inputs, does not trigger a spurious write.
+    """
+    if not neural_path or not quality_ids:
+        return no_update
+
+    session = load_session_from_paths(neural_path, "")
+    qc_data = load_qc(session.pl2_path, session)
+    quality_by_idx = {qid["index"]: (q or "") for qid, q in zip(quality_ids, qualities)}
+    comment_by_idx = {cid["index"]: (c or "") for cid, c in zip(comment_ids, comments)}
+
+    changed = qc_data.get("exemplar_channel_index") != exemplar_idx
+    for key, entry in qc_data["channels"].items():
+        idx = int(key)
+        new_q = quality_by_idx.get(idx, entry.get("quality", ""))
+        new_c = comment_by_idx.get(idx, entry.get("comment", ""))
+        if new_q != entry.get("quality", "") or new_c != entry.get("comment", ""):
+            changed = True
+        entry["quality"] = new_q
+        entry["comment"] = new_c
+    qc_data["exemplar_channel_index"] = exemplar_idx
+
+    if not changed:
+        return no_update
+    save_qc(session.pl2_path, qc_data)
+    return "saved ✓"
+
+
+# ---------------------------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("download-qc-csv", "data"),
+    Input("btn-download-qc-csv", "n_clicks"),
+    State("store-neural-path", "data"),
+    prevent_initial_call=True,
+)
+def download_qc_csv(n_clicks, neural_path):
+    if not neural_path:
+        return no_update
+    session = load_session_from_paths(neural_path, "")
+    df = qc_to_dataframe(load_qc(session.pl2_path, session))
+    return dcc.send_data_frame(df.to_csv, f"{Path(neural_path).stem}_qc.csv", index=False)
+
+
+@callback(
+    Output("download-behavior-csv", "data"),
+    Input("btn-download-behavior-csv", "n_clicks"),
+    State("store-behavior-path", "data"),
+    prevent_initial_call=True,
+)
+def download_behavior_csv(n_clicks, behavior_path):
+    if not behavior_path:
+        return no_update
+    session = load_session_from_paths("", behavior_path)
+    return dcc.send_data_frame(
+        session.behavior_data.to_csv, f"{Path(behavior_path).stem}_tracking.csv", index=False,
+    )
