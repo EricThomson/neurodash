@@ -74,6 +74,9 @@ def plot_session_view(session, controls):
             panels.append(("velocity", _plot_velocity))
         if controls.get("show_position", True):
             panels.append(("position", _plot_position))
+        # Mobility is a continuous % channel; skip gracefully if the file lacks it.
+        if controls.get("show_mobility", True) and "Mobility" in session.behavior_data.columns:
+            panels.append(("mobility", _plot_mobility))
 
     if not panels:
         return None
@@ -108,8 +111,10 @@ def plot_session_view(session, controls):
 
     fig.update_xaxes(title_text="Time (s)", row=n, col=1)
     fig.update_xaxes(autorange=False)
+    # No fixed height — the graph is responsive and fills its container (the
+    # viewer pane sizes it to the viewport), so all panels fit without scrolling.
     fig.update_layout(
-        height=250 * n,
+        autosize=True,
         margin=dict(l=60, r=20, t=20, b=40),
         dragmode="pan",
         showlegend=False,
@@ -134,7 +139,25 @@ def velocity_ylim(v):
     -------
     (float, float)
     """
-    return (-1.0, float(np.nanpercentile(v, 99.5)))
+    return (-1.0, float(np.nanpercentile(v, 99.9)))
+
+
+def mobility_ylim(m):
+    """Return (y_min, y_max) for mobility (%) display.
+
+    Most of the action sits in the low percentages, so cap the top at a high
+    percentile rather than the full 0–100 range. Floored at 0 (a percentage
+    can't be negative).
+
+    Parameters
+    ----------
+    m : np.ndarray
+
+    Returns
+    -------
+    (float, float)
+    """
+    return (0.0, float(np.nanpercentile(m, 99.9)))
 
 
 def normalize_lfp_traces(ys):
@@ -314,12 +337,32 @@ def _plot_velocity(fig, row, session, controls):
     )
 
 
+def _plot_mobility(fig, row, session, controls):
+    t = session.behavior_data["Recording time"].to_numpy(dtype=float)
+    m = session.behavior_data["Mobility"].to_numpy(dtype=float)
+
+    fig.add_trace(
+        go.Scatter(
+            x=t, y=m,
+            mode="lines",
+            name="Mobility",
+            line=dict(color="darkorange", width=0.8),
+        ),
+        row=row, col=1,
+    )
+    fig.update_yaxes(
+        title_text="Mobility (%)",
+        range=list(mobility_ylim(m)), fixedrange=True,
+        row=row, col=1,
+    )
+
+
 # ---------------------------------------------------------------------------
-# Channel QC — one combined figure for all channels (own lazy-rendered view)
+# Channel Viewer — one combined figure for all channels (own lazy-rendered view)
 # ---------------------------------------------------------------------------
 
-def plot_qc_figure(session, view_range=None, spect_params=None):
-    """Combined QC figure: raw LFP (col 1) + spectrogram (col 2) per channel.
+def plot_channel_figure(session, view_range=None, spect_params=None):
+    """Combined channel figure: raw LFP (col 1) + spectrogram (col 2) per channel.
 
     All x-axes are linked (matches='x') so panning/zooming one panel moves every
     panel together — the single-figure sync the Session Viewer uses. One figure
@@ -375,7 +418,7 @@ def plot_qc_figure(session, view_range=None, spect_params=None):
                 row=row, col=2,
             )
         except Exception as e:
-            print(f"QC spectrogram error ch{ch}: {e}")
+            print(f"Channel spectrogram error ch{ch}: {e}")
         fig.update_yaxes(title_text="Hz", range=[0, max_freq],
                          fixedrange=True, row=row, col=2)
 
@@ -396,7 +439,7 @@ def plot_qc_figure(session, view_range=None, spect_params=None):
         fig.update_xaxes(range=list(view_range), autorange=False)
 
     fig.update_layout(
-        height=config.QC_ROW_HEIGHT * n + 50,  # + top/bottom margins below
+        height=config.CHANNEL_ROW_HEIGHT * n + 50,  # + top/bottom margins below
         margin=dict(l=50, r=10, t=10, b=40),
         dragmode="pan",
         showlegend=False,

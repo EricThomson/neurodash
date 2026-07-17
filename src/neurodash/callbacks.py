@@ -16,15 +16,17 @@ from neurodash.config import (
     DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
-    EXEMPLAR_SEEDS_DEFAULT_CHANNEL,
+    EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
 from neurodash.file_picker import pick_file
-from neurodash.behavior_io import get_display_metadata
-from neurodash.neural_io import get_analog_signal, extract_time_window
-from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_qc_figure
+from neurodash.behavior_io import (
+    get_display_metadata, build_behavior_table, load_behavior_notes, save_behavior_notes,
+)
+from neurodash.neural_io import get_analog_signal, extract_time_window, build_neural_table
+from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_channel_figure
 from neurodash.session import load_session_from_paths, compute_spectrogram
-from neurodash.qc_io import load_qc, save_qc, qc_to_dataframe
-from neurodash.layout import build_qc_view, exemplar_glyph, exemplar_button_style
+from neurodash.channel_io import load_channels, save_channels
+from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +61,9 @@ def browse_neural(n_clicks):
         for idx, lbl in zip(sig_info["channel_indices"], sig_info["channel_labels"])
     ]
 
+    # Channel sidecar — source of the (filename-inferred) animal ID and exemplar.
+    channel_data = load_channels(path, session)
+
     # Build metadata display
     dur = sig_info["duration_sec"]
     minutes = int(dur // 60)
@@ -67,16 +72,17 @@ def browse_neural(n_clicks):
     dt_str = rec_dt.strftime("%Y-%m-%d %H:%M") if rec_dt else "Unknown"
 
     metadata = html.Div([
+        html.Div(f"Mouse: {channel_data.get('animal') or 'Unknown'}"),
         html.Div(f"Recorded: {dt_str}"),
         html.Div(f"Duration: {minutes}m {seconds:.1f}s"),
         html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
         html.Div(f"Channels: {sig_info['n_channels']}"),
     ])
 
-    # Seed the default selected channel from a saved QC exemplar (if any).
+    # Seed the default selected channel from a saved exemplar (if any).
     default_channel = 0
     if EXEMPLAR_SEEDS_DEFAULT_CHANNEL:
-        ex = load_qc(path, session).get("exemplar_channel_index")
+        ex = channel_data.get("exemplar_channel_index")
         if ex is not None and 0 <= ex < sig_info["n_channels"]:
             default_channel = ex
 
@@ -154,7 +160,7 @@ clientside_callback(
 )
 
 
-# Panning/zooming the combined QC figure updates the same shared window.
+# Panning/zooming the combined channel figure updates the same shared window.
 clientside_callback(
     """
     function(relayoutData) {
@@ -166,7 +172,7 @@ clientside_callback(
     }
     """,
     Output("store-view-range", "data", allow_duplicate=True),
-    Input("qc-plot", "relayoutData"),
+    Input("channel-plot", "relayoutData"),
     prevent_initial_call=True,
 )
 
@@ -201,11 +207,11 @@ clientside_callback(
     """
     function(toggleValue, tabValue) {
         var toggled = toggleValue && toggleValue.indexOf("on") !== -1;
-        var onQC = tabValue === "qc";
+        var onChannels = tabValue === "channels";
         /* Params: shown when the Session Viewer spectrogram is on, and always
            on the Channel Viewer. Channel selector: Session Viewer only. */
-        var showParams = toggled || onQC;
-        var showChannel = toggled && !onQC;
+        var showParams = toggled || onChannels;
+        var showChannel = toggled && !onChannels;
         return [
             {"display": showParams ? "block" : "none"},
             {"display": showChannel ? "block" : "none"}
@@ -253,9 +259,9 @@ clientside_callback(
         if (graphDiv) {
             Plotly.relayout(graphDiv, {"xaxis.range": [x0, x1], "xaxis.autorange": false});
         }
-        var qcDiv = document.querySelector("#qc-plot .js-plotly-plot");
-        if (qcDiv) {
-            Plotly.relayout(qcDiv, {"xaxis.range": [x0, x1], "xaxis.autorange": false});
+        var channelDiv = document.querySelector("#channel-plot .js-plotly-plot");
+        if (channelDiv) {
+            Plotly.relayout(channelDiv, {"xaxis.range": [x0, x1], "xaxis.autorange": false});
         }
 
         return [x0, x1];
@@ -311,7 +317,8 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
 
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
     fig.update_xaxes(range=[x0, x1], autorange=False)
-    return fig, {"display": "block"}, {"display": "none"}
+    # Keep the viewport-fit height when un-hiding (this replaces the whole style).
+    return fig, {"display": "block", "height": "calc(100vh - 120px)"}, {"display": "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +481,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
 
 
 # ---------------------------------------------------------------------------
-# Channel QC — tab switching, lazy grid render, annotation persistence
+# Channel Viewer — tab switching, lazy grid render, annotation persistence
 # ---------------------------------------------------------------------------
 
 # Show the active tab's content pane, hide the other (both stay mounted so the
@@ -482,15 +489,15 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
 clientside_callback(
     """
     function(tabValue) {
-        var showQC = tabValue === "qc";
+        var showChannels = tabValue === "channels";
         return [
-            {"display": showQC ? "none" : "block"},
-            {"display": showQC ? "block" : "none"}
+            {"display": showChannels ? "none" : "block"},
+            {"display": showChannels ? "block" : "none"}
         ];
     }
     """,
     Output("div-viewer-content", "style"),
-    Output("div-qc-wrap", "style"),
+    Output("div-channel-wrap", "style"),
     Input("tabs-main", "value"),
 )
 
@@ -500,8 +507,10 @@ def _spect_params(window, step, c, max_freq):
 
 
 @callback(
-    Output("qc-content", "children"),
-    Output("store-qc-exemplar", "data"),
+    Output("channel-content", "children"),
+    Output("store-channel-exemplar", "data"),
+    Output("div-channel-animal", "children"),
+    Output("input-channel-comment", "value"),
     Input("tabs-main", "value"),
     State("store-neural-path", "data"),
     State("store-view-range", "data"),
@@ -511,24 +520,27 @@ def _spect_params(window, step, c, max_freq):
     State("input-spect-max-freq", "value"),
     prevent_initial_call=True,
 )
-def render_qc_tab(tab_value, neural_path, view_range,
-                  spect_window, spect_step, spect_c, spect_max_freq):
-    """Lazily build the QC view when the QC tab is opened, at the current window."""
-    if tab_value != "qc":
-        return no_update, no_update
+def render_channel_tab(tab_value, neural_path, view_range,
+                       spect_window, spect_step, spect_c, spect_max_freq):
+    """Lazily build the Channel Viewer when its tab is opened, at the current window."""
+    if tab_value != "channels":
+        return no_update, no_update, no_update, no_update
     if not neural_path:
-        return html.Div("Load neural data to review channels.",
-                        style={"color": "#999", "padding": "20px"}), no_update
+        return (html.Div("Load neural data to review channels.",
+                         style={"color": "#999", "padding": "20px"}),
+                no_update, no_update, no_update)
 
     session = load_session_from_paths(neural_path, "")
-    qc_data = load_qc(session.pl2_path, session)
+    channel_data = load_channels(session.pl2_path, session)
     params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
-    return (build_qc_view(session, qc_data, view_range, params),
-            qc_data.get("exemplar_channel_index"))
+    return (build_channel_view(session, channel_data, view_range, params),
+            channel_data.get("exemplar_channel_index"),
+            f"Animal: {channel_data.get('animal') or 'Unknown'}",
+            channel_data.get("comment", ""))
 
 
 @callback(
-    Output("qc-plot", "figure"),
+    Output("channel-plot", "figure"),
     Input("input-spect-window", "value"),
     Input("input-spect-step", "value"),
     Input("input-spect-c-param", "value"),
@@ -538,23 +550,23 @@ def render_qc_tab(tab_value, neural_path, view_range,
     State("store-view-range", "data"),
     prevent_initial_call=True,
 )
-def update_qc_spectrograms(spect_window, spect_step, spect_c, spect_max_freq,
-                           tab_value, neural_path, view_range):
-    """Rebuild the QC figure when a spectrogram control changes (QC tab only).
+def update_channel_spectrograms(spect_window, spect_step, spect_c, spect_max_freq,
+                                tab_value, neural_path, view_range):
+    """Rebuild the channel figure when a spectrogram control changes (Channel Viewer only).
 
     Only the figure is rebuilt — the controls gutter and its state are untouched.
     The current window is preserved.
     """
-    if tab_value != "qc" or not neural_path:
+    if tab_value != "channels" or not neural_path:
         return no_update
     session = load_session_from_paths(neural_path, "")
     params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
-    return plot_qc_figure(session, view_range, params)
+    return plot_channel_figure(session, view_range, params)
 
 
 @callback(
-    Output("store-qc-exemplar", "data", allow_duplicate=True),
-    Input({"type": "qc-exemplar", "index": ALL}, "n_clicks"),
+    Output("store-channel-exemplar", "data", allow_duplicate=True),
+    Input({"type": "channel-exemplar", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
 def set_exemplar(_n_clicks):
@@ -569,10 +581,10 @@ def set_exemplar(_n_clicks):
 
 
 @callback(
-    Output({"type": "qc-exemplar", "index": ALL}, "children"),
-    Output({"type": "qc-exemplar", "index": ALL}, "style"),
-    Input("store-qc-exemplar", "data"),
-    State({"type": "qc-exemplar", "index": ALL}, "id"),
+    Output({"type": "channel-exemplar", "index": ALL}, "children"),
+    Output({"type": "channel-exemplar", "index": ALL}, "style"),
+    Input("store-channel-exemplar", "data"),
+    State({"type": "channel-exemplar", "index": ALL}, "id"),
     prevent_initial_call=True,
 )
 def refresh_exemplar_stars(exemplar_idx, ids):
@@ -586,75 +598,226 @@ def refresh_exemplar_stars(exemplar_idx, ids):
 
 
 @callback(
-    Output("div-qc-save-status", "children"),
-    Input({"type": "qc-quality", "index": ALL}, "value"),
-    Input({"type": "qc-comment", "index": ALL}, "value"),
-    Input("store-qc-exemplar", "data"),
-    State({"type": "qc-quality", "index": ALL}, "id"),
-    State({"type": "qc-comment", "index": ALL}, "id"),
+    Output("store-channel-saved", "data"),
+    Input({"type": "channel-quality", "index": ALL}, "value"),
+    Input({"type": "channel-comment", "index": ALL}, "value"),
+    Input({"type": "channel-include", "index": ALL}, "value"),
+    Input("store-channel-exemplar", "data"),
+    Input("input-channel-comment", "value"),
+    State({"type": "channel-quality", "index": ALL}, "id"),
+    State({"type": "channel-comment", "index": ALL}, "id"),
+    State({"type": "channel-include", "index": ALL}, "id"),
     State("store-neural-path", "data"),
     prevent_initial_call=True,
 )
-def save_qc_edits(qualities, comments, exemplar_idx, quality_ids, comment_ids, neural_path):
-    """Persist the whole QC record whenever a rating/comment/exemplar changes.
+def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comment,
+                       quality_ids, comment_ids, include_ids, neural_path):
+    """Silently persist the channel record whenever a rating/comment/include/exemplar/note changes.
 
     Rebuilds from the UI (which holds the complete state) and writes only when
-    something actually differs from the sidecar — so re-opening the QC tab, which
-    re-fires these inputs, does not trigger a spurious write.
+    something actually differs from the sidecar — so re-opening the Channel Viewer,
+    which re-fires these inputs, does not trigger a spurious write. No user-facing
+    confirmation (the sink store just satisfies the callback's Output requirement).
+    The animal ID is filename-derived and read-only, so it is not edited here.
     """
     if not neural_path or not quality_ids:
         return no_update
 
     session = load_session_from_paths(neural_path, "")
-    qc_data = load_qc(session.pl2_path, session)
+    channel_data = load_channels(session.pl2_path, session)
     quality_by_idx = {qid["index"]: (q or "") for qid, q in zip(quality_ids, qualities)}
     comment_by_idx = {cid["index"]: (c or "") for cid, c in zip(comment_ids, comments)}
+    include_by_idx = {iid["index"]: bool(v) for iid, v in zip(include_ids, includes)}
 
-    changed = qc_data.get("exemplar_channel_index") != exemplar_idx
-    for key, entry in qc_data["channels"].items():
+    changed = channel_data.get("exemplar_channel_index") != exemplar_idx
+    new_note = general_comment or ""
+    if new_note != channel_data.get("comment", ""):
+        channel_data["comment"] = new_note
+        changed = True
+    for key, entry in channel_data["channels"].items():
         idx = int(key)
         new_q = quality_by_idx.get(idx, entry.get("quality", ""))
         new_c = comment_by_idx.get(idx, entry.get("comment", ""))
-        if new_q != entry.get("quality", "") or new_c != entry.get("comment", ""):
+        new_inc = include_by_idx.get(idx, entry.get("include", True))
+        if (new_q != entry.get("quality", "") or new_c != entry.get("comment", "")
+                or new_inc != entry.get("include", True)):
             changed = True
         entry["quality"] = new_q
         entry["comment"] = new_c
-    qc_data["exemplar_channel_index"] = exemplar_idx
+        entry["include"] = new_inc
+    channel_data["exemplar_channel_index"] = exemplar_idx
 
     if not changed:
         return no_update
-    save_qc(session.pl2_path, qc_data)
-    return "saved ✓"
+    save_channels(session.pl2_path, channel_data)
+    return channel_data.get("updated_at")
 
 
 # ---------------------------------------------------------------------------
 # CSV export
 # ---------------------------------------------------------------------------
 
+_NO_ANIMAL_HINT = "No animal ID (check the recording filename) — can't export."
+
+
+def _write_export(df, filename, comment=""):
+    """Write a CSV into the export dir (creating it) and return the full path.
+
+    An optional free-text comment is written as `#`-prefixed header lines above
+    the data (skippable on import, e.g. JMP's comment-character setting).
+    """
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    out = EXPORT_DIR / filename
+    with open(out, "w", newline="") as f:
+        for line in (comment or "").splitlines():
+            f.write(f"# {line}\n")
+        df.to_csv(f, index=False)
+    return out
+
+
+def _comment_lines(text, label="comment"):
+    """Split a free-text comment into header lines, labelling the first line."""
+    lines = []
+    for i, ln in enumerate((text or "").strip().splitlines()):
+        lines.append(f"{label}: {ln}" if i == 0 else ln)
+    return lines
+
+
+def _channel_header(session, channel_data, included):
+    """Assemble the neural-CSV header block: animal, recording provenance, general
+    comment, exemplar, and each exported channel's quality + comment. Returned as
+    plain lines; `_write_export` adds the `#` prefixes.
+    """
+    channels = channel_data.get("channels", {})
+    sig_info = session.analog_signal_summaries[0]
+    rec = session.rec_datetime
+
+    lines = [f"animal: {channel_data.get('animal') or 'Unknown'}"]
+    if rec is not None:
+        lines.append(f"recorded: {rec.strftime('%Y-%m-%d %H:%M')}")
+    if session.pl2_path:
+        lines.append(f"source: {Path(session.pl2_path).name}")
+    lines.append(f"sampling_rate_hz: {sig_info['sampling_rate_hz']:.0f}")
+    lines.append(f"duration_s: {sig_info['duration_sec']:.1f}")
+
+    lines += _comment_lines(channel_data.get("comment"))
+
+    exemplar = channel_data.get("exemplar_channel_index")
+    if exemplar is not None:
+        label = channels.get(str(exemplar), {}).get("label", str(exemplar))
+        suffix = "" if exemplar in included else " (not exported)"
+        lines.append(f"exemplar: {label}{suffix}")
+
+    for idx in included:
+        entry = channels.get(str(idx), {})
+        label = entry.get("label", str(idx))
+        quality = entry.get("quality") or "unrated"
+        note = (entry.get("comment") or "").strip()
+        line = f"{label} [{quality}]"
+        if note:
+            line += f": {note}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _behavior_header(behavior_path, session, animal):
+    """Assemble the behavior-CSV header block: animal, session provenance from the
+    EthoVision metadata, and the general behavioral comment.
+    """
+    info = get_display_metadata(session.behavior_metadata)
+    start = info.get("start_time")
+    start_str = start.strftime("%Y-%m-%d %H:%M") if hasattr(start, "strftime") else (start or None)
+
+    lines = [f"animal: {animal or 'Unknown'}"]
+    if start_str:
+        lines.append(f"start_time: {start_str}")
+    for key, field in (("experiment", "experiment"), ("trial", "trial_name"),
+                       ("arena", "arena_name")):
+        if info.get(field):
+            lines.append(f"{key}: {info[field]}")
+    lines.append(f"source: {Path(behavior_path).name}")
+    lines += _comment_lines(load_behavior_notes(behavior_path).get("comment"))
+    return "\n".join(lines)
+
+
 @callback(
-    Output("download-qc-csv", "data"),
-    Input("btn-download-qc-csv", "n_clicks"),
+    Output("div-channel-export-status", "children"),
+    Input("btn-download-channel-csv", "n_clicks"),
     State("store-neural-path", "data"),
     prevent_initial_call=True,
 )
-def download_qc_csv(n_clicks, neural_path):
+def export_channel_csv(n_clicks, neural_path):
+    """Write the LFP signal (animal, time, one column per checked channel) to CSV."""
     if not neural_path:
         return no_update
     session = load_session_from_paths(neural_path, "")
-    df = qc_to_dataframe(load_qc(session.pl2_path, session))
-    return dcc.send_data_frame(df.to_csv, f"{Path(neural_path).stem}_qc.csv", index=False)
+    channel_data = load_channels(session.pl2_path, session)
+    if not channel_data.get("animal"):
+        return _NO_ANIMAL_HINT
+    included = sorted(
+        int(key) for key, entry in channel_data.get("channels", {}).items()
+        if entry.get("include", True)
+    )
+    if not included:
+        return "No channels selected — check the Save box on the channels to export."
+    df = build_neural_table(session, included, channel_data["animal"])
+    out = _write_export(df, f"{Path(neural_path).stem}_neural.csv",
+                        comment=_channel_header(session, channel_data, included))
+    return f"Saved to {out}"
 
 
 @callback(
-    Output("download-behavior-csv", "data"),
+    Output("div-behavior-export-status", "children"),
     Input("btn-download-behavior-csv", "n_clicks"),
+    State("store-behavior-path", "data"),
+    State("store-neural-path", "data"),
+    prevent_initial_call=True,
+)
+def export_behavior_csv(n_clicks, behavior_path, neural_path):
+    if not behavior_path:
+        return no_update
+    # animal is derived from the paired neural recording's sidecar.
+    animal = ""
+    if neural_path:
+        nsession = load_session_from_paths(neural_path, "")
+        animal = load_channels(nsession.pl2_path, nsession).get("animal", "")
+    if not animal:
+        return _NO_ANIMAL_HINT
+    session = load_session_from_paths("", behavior_path)
+    df = build_behavior_table(session.behavior_data, animal)
+    out = _write_export(df, f"{Path(behavior_path).stem}_behavior.csv",
+                        comment=_behavior_header(behavior_path, session, animal))
+    return f"Saved to {out}"
+
+
+# ---------------------------------------------------------------------------
+# Behavioral data note — free-text comment on the whole recording, sidecar-persisted
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("input-behavior-comment", "value"),
+    Input("store-behavior-path", "data"),
+)
+def load_behavior_comment(behavior_path):
+    """Populate the behavioral comment box from its sidecar when a file loads."""
+    if not behavior_path:
+        return ""
+    return load_behavior_notes(behavior_path).get("comment", "")
+
+
+@callback(
+    Output("store-behavior-saved", "data"),
+    Input("input-behavior-comment", "value"),
     State("store-behavior-path", "data"),
     prevent_initial_call=True,
 )
-def download_behavior_csv(n_clicks, behavior_path):
+def save_behavior_comment(comment, behavior_path):
+    """Silently persist the behavioral comment; writes only when it changes."""
     if not behavior_path:
         return no_update
-    session = load_session_from_paths("", behavior_path)
-    return dcc.send_data_frame(
-        session.behavior_data.to_csv, f"{Path(behavior_path).stem}_tracking.csv", index=False,
-    )
+    new_comment = comment or ""
+    if new_comment == load_behavior_notes(behavior_path).get("comment", ""):
+        return no_update
+    save_behavior_notes(behavior_path, {"comment": new_comment})
+    return new_comment

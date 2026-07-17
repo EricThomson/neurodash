@@ -12,10 +12,10 @@ from neurodash.config import (
     DEFAULT_SPECT_STEP_SEC,
     DEFAULT_SPECT_C_PARAM,
     LOGO_PATH,
-    QC_QUALITY_OPTIONS,
-    QC_ROW_HEIGHT,
+    CHANNEL_QUALITY_OPTIONS,
+    CHANNEL_ROW_HEIGHT,
 )
-from neurodash.plot_utils import plot_qc_figure
+from neurodash.plot_utils import plot_channel_figure
 
 # ---------------------------------------------------------------------------
 # Style constants
@@ -85,9 +85,6 @@ def _left_sidebar():
                     html.Button("Load behavior data", id="btn-browse-behavior", n_clicks=0),
                     html.Div(id="div-behavior-filename", style={"marginTop": "6px"}),
                     html.Div(id="div-behavior-metadata", style=_META_STYLE),
-                    html.Button("Download behavior CSV", id="btn-download-behavior-csv",
-                                n_clicks=0,
-                                style={"marginTop": "8px", "fontSize": "0.85em"}),
                 ],
                 style=_BEHAVIOR_SECTION,
             ),
@@ -225,7 +222,7 @@ def make_layout():
         [
             _left_sidebar(),
 
-            # Main area — Session Viewer / Channel QC tabs
+            # Main area — Session Viewer / Channel Viewer tabs
             html.Div(
                 [
                     dcc.Tabs(
@@ -233,13 +230,32 @@ def make_layout():
                         value="viewer",
                         children=[
                             dcc.Tab(label="Session Viewer", value="viewer"),
-                            dcc.Tab(label="Channel Viewer", value="qc"),
+                            dcc.Tab(label="Channel Viewer", value="channels"),
                         ],
                     ),
 
                     # Session Viewer pane — always mounted (display toggled by tab)
                     html.Div(
                         [
+                            # Behavioral-data export + a free-text comment on the recording
+                            html.Div(
+                                [
+                                    html.Button("Download to CSV",
+                                                id="btn-download-behavior-csv", n_clicks=0),
+                                    html.Span(id="div-behavior-export-status",
+                                              style={"marginLeft": "10px", "color": "#999",
+                                                     "fontSize": "0.85em"}),
+                                    dcc.Textarea(
+                                        id="input-behavior-comment",
+                                        placeholder="Comments on behavioral data...",
+                                        style={"marginLeft": "16px", "flex": 1,
+                                               "height": "32px", "fontSize": "0.85em",
+                                               "resize": "vertical"},
+                                    ),
+                                ],
+                                style={"display": "flex", "alignItems": "center",
+                                       "marginBottom": "8px"},
+                            ),
                             html.Div(
                                 "Load data to begin",
                                 id="div-plot-placeholder",
@@ -254,7 +270,8 @@ def make_layout():
                             ),
                             dcc.Graph(
                                 id="main-plot",
-                                style={"display": "none"},
+                                responsive=True,
+                                style={"display": "none", "height": "calc(100vh - 120px)"},
                                 config={"toImageButtonOptions": {
                                     "format": "png",
                                     "filename": "neurodash_session",
@@ -265,23 +282,35 @@ def make_layout():
                         id="div-viewer-content",
                     ),
 
-                    # Channel QC pane — always mounted, hidden until tab selected
+                    # Channel Viewer pane — always mounted, hidden until tab selected
                     html.Div(
                         [
                             html.Div(
                                 [
-                                    html.Button("Download QC table (CSV)",
-                                                id="btn-download-qc-csv", n_clicks=0),
-                                    html.Span(id="div-qc-save-status",
+                                    html.Span(id="div-channel-animal",
+                                              style={"fontSize": "0.85em",
+                                                     "fontWeight": "bold",
+                                                     "marginRight": "16px"}),
+                                    html.Button("Download to CSV",
+                                                id="btn-download-channel-csv", n_clicks=0),
+                                    html.Span(id="div-channel-export-status",
                                               style={"marginLeft": "10px",
-                                                     "color": "#3a8a3a",
+                                                     "color": "#999",
                                                      "fontSize": "0.85em"}),
+                                    dcc.Textarea(
+                                        id="input-channel-comment",
+                                        placeholder="Comments on neural data...",
+                                        style={"marginLeft": "16px", "flex": 1,
+                                               "height": "32px", "fontSize": "0.85em",
+                                               "resize": "vertical"},
+                                    ),
                                 ],
-                                style={"marginBottom": "8px"},
+                                style={"marginBottom": "8px", "display": "flex",
+                                       "alignItems": "center"},
                             ),
-                            dcc.Loading(html.Div(id="qc-content")),
+                            dcc.Loading(html.Div(id="channel-content")),
                         ],
-                        id="div-qc-wrap",
+                        id="div-channel-wrap",
                         style={"display": "none"},
                     ),
                 ],
@@ -295,19 +324,17 @@ def make_layout():
             dcc.Store(id="store-behavior-path", data=""),
             dcc.Store(id="store-video-path", data=""),
             dcc.Store(id="store-view-range", data=[0, DEFAULT_VIEW_DURATION]),
-            dcc.Store(id="store-qc-exemplar", data=None),
-
-            # Downloads
-            dcc.Download(id="download-qc-csv"),
-            dcc.Download(id="download-behavior-csv"),
+            dcc.Store(id="store-channel-exemplar", data=None),
+            dcc.Store(id="store-channel-saved"),  # sink for the silent annotation auto-save
+            dcc.Store(id="store-behavior-saved"),  # sink for the silent behavior-note auto-save
         ],
         style={"display": "flex", "height": "100vh"},
     )
 
 
 # ---------------------------------------------------------------------------
-# Channel QC view — one synced figure + an aligned column of per-channel
-# controls, built lazily when the QC tab is opened (see callbacks)
+# Channel Viewer — one synced figure + an aligned column of per-channel
+# controls, built lazily when the Channel Viewer tab is opened (see callbacks)
 # ---------------------------------------------------------------------------
 
 def exemplar_glyph(is_exemplar):
@@ -322,16 +349,22 @@ def exemplar_button_style(is_exemplar):
     }
 
 
-def _qc_control_block(idx, label, entry, is_exemplar):
+def _channel_control_block(idx, label, entry, is_exemplar):
     """One channel's controls, sized (flex:1) to line up with its figure row."""
     return html.Div(
         [
             html.Div(
                 [
                     html.Span(label, style={"fontWeight": "bold"}),
+                    dcc.Checklist(
+                        id={"type": "channel-include", "index": idx},
+                        options=[{"label": " Save", "value": "y"}],
+                        value=["y"] if entry.get("include", True) else [],
+                        style={"fontSize": "0.8em"},
+                    ),
                     html.Button(
                         exemplar_glyph(is_exemplar),
-                        id={"type": "qc-exemplar", "index": idx},
+                        id={"type": "channel-exemplar", "index": idx},
                         title="Mark as exemplar channel",
                         n_clicks=0,
                         style=exemplar_button_style(is_exemplar),
@@ -341,15 +374,15 @@ def _qc_control_block(idx, label, entry, is_exemplar):
                        "alignItems": "center"},
             ),
             dcc.RadioItems(
-                id={"type": "qc-quality", "index": idx},
+                id={"type": "channel-quality", "index": idx},
                 options=[{"label": f" {q.capitalize()}", "value": q}
-                         for q in QC_QUALITY_OPTIONS],
+                         for q in CHANNEL_QUALITY_OPTIONS],
                 value=entry.get("quality") or None,
                 inline=True,
                 style={"fontSize": "0.85em", "marginTop": "4px"},
             ),
             dcc.Input(
-                id={"type": "qc-comment", "index": idx},
+                id={"type": "channel-comment", "index": idx},
                 type="text", value=entry.get("comment", ""),
                 placeholder="comment...", debounce=True,
                 style={"width": "100%", "marginTop": "4px", "fontSize": "0.85em"},
@@ -363,23 +396,23 @@ def _qc_control_block(idx, label, entry, is_exemplar):
     )
 
 
-def build_qc_view(session, qc_data, view_range=None, spect_params=None):
-    """Build the QC view: a controls gutter aligned to one synced figure.
+def build_channel_view(session, channel_data, view_range=None, spect_params=None):
+    """Build the Channel Viewer: a controls gutter aligned to one synced figure.
 
     The gutter's height + top/bottom padding mirror the figure's height +
     margins, and both divide into n equal rows, so each control block lines up
     with its channel's row in the figure.
     """
     sig_info = session.analog_signal_summaries[0]
-    exemplar = qc_data.get("exemplar_channel_index")
-    channels = qc_data.get("channels", {})
+    exemplar = channel_data.get("exemplar_channel_index")
+    channels = channel_data.get("channels", {})
     n = len(sig_info["channel_indices"])
 
     gutter = html.Div(
         [
-            _qc_control_block(
+            _channel_control_block(
                 idx, label,
-                channels.get(str(idx), {"quality": "", "comment": ""}),
+                channels.get(str(idx), {"quality": "", "comment": "", "include": True}),
                 idx == exemplar,
             )
             for idx, label in zip(sig_info["channel_indices"], sig_info["channel_labels"])
@@ -387,20 +420,20 @@ def build_qc_view(session, qc_data, view_range=None, spect_params=None):
         style={
             "display": "flex", "flexDirection": "column",
             "width": "200px", "flexShrink": 0,
-            "height": f"{QC_ROW_HEIGHT * n + 50}px",
+            "height": f"{CHANNEL_ROW_HEIGHT * n + 50}px",
             "paddingTop": "10px", "paddingBottom": "40px",
             "boxSizing": "border-box",
         },
     )
     stem = Path(session.pl2_path).stem
     graph = dcc.Graph(
-        id="qc-plot",
-        figure=plot_qc_figure(session, view_range, spect_params),
+        id="channel-plot",
+        figure=plot_channel_figure(session, view_range, spect_params),
         style={"flex": 1, "minWidth": 0},
         config={
             "scrollZoom": True,
             "displaylogo": False,
-            "toImageButtonOptions": {"format": "png", "filename": f"{stem}_qc", "scale": 2},
+            "toImageButtonOptions": {"format": "png", "filename": f"{stem}_channels", "scale": 2},
         },
     )
     return html.Div([gutter, graph], style={"display": "flex", "alignItems": "flex-start"})

@@ -15,7 +15,9 @@ Key columns: Recording time, X/Y center/nose/tail (cm), Velocity (cm/s),
 Direction (deg), Distance moved (cm).
 """
 
+import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -212,6 +214,80 @@ def estimate_position_pixels(x, y, video_width, video_height,
     px = ((x - x_min) / (x_max - x_min) * video_width) * scale_x + offset_x
     py = ((1.0 - (y - y_min) / (y_max - y_min)) * video_height) * scale_y + offset_y
     return px, py
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+def build_behavior_table(data, animal):
+    """Curated JMP-ready per-sample behavioral table for CSV export.
+
+    Columns: animal, time, x, y, velocity, mobility — one row per behavioral
+    sample, sorted by time. `animal` (from the pl2 filename) is the same for
+    every row, so combining across animals later is a plain concat. `mobility`
+    is the EthoVision 'Mobility' column (%), or NaN if the file lacks it.
+
+    Parameters
+    ----------
+    data : pd.DataFrame — output of load_behavior_file.
+    animal : str — animal ID.
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    t, x, y = extract_position(data, point="center")
+    velocity = data["Velocity"].to_numpy(dtype=float)
+    if "Mobility" in data.columns:
+        mobility = data["Mobility"].to_numpy(dtype=float)
+    else:
+        mobility = np.full(len(t), np.nan)
+
+    table = pd.DataFrame({
+        "animal": animal,
+        "time": t,
+        "x": x,
+        "y": y,
+        "velocity": velocity,
+        "mobility": mobility,
+    })
+    return table.sort_values("time", kind="stable").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Behavior notes — a free-text comment on the whole recording, persisted as a
+# JSON sidecar (<stem>.behavior.json) next to the Excel file, like the channel
+# sidecar. Reloads on the next open.
+# ---------------------------------------------------------------------------
+
+def behavior_sidecar_path(behavior_path):
+    """Return the notes sidecar path: <stem>.behavior.json beside the Excel file."""
+    p = Path(behavior_path)
+    return p.parent / (p.stem + ".behavior.json")
+
+
+def load_behavior_notes(behavior_path):
+    """Load the behavior notes sidecar, or a blank record if none exists."""
+    path = behavior_sidecar_path(behavior_path)
+    if path.exists():
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return {"comment": data.get("comment", "")}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"comment": ""}
+
+
+def save_behavior_notes(behavior_path, notes):
+    """Write the behavior notes sidecar next to the Excel file."""
+    payload = {
+        "comment": notes.get("comment", ""),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    with open(behavior_sidecar_path(behavior_path), "w") as f:
+        json.dump(payload, f, indent=2)
 
 
 # ---------------------------------------------------------------------------

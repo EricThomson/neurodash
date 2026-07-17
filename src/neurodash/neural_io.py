@@ -10,6 +10,7 @@ The main entry points are:
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import neo
 
 
@@ -102,3 +103,37 @@ def extract_time_window(sig, channel_index, start_time_sec, duration_sec):
     y = np.asarray(sig[start_idx:end_idx, channel_index]).squeeze()
     t = np.arange(start_idx, end_idx) / sr
     return t, y, sr
+
+
+def build_neural_table(session, channel_indices, animal):
+    """Wide LFP table for CSV export: animal, time, one voltage column per channel.
+
+    Full-resolution signal for each requested channel over the whole recording —
+    the neural parallel to the behavioral table. `animal` is the same for every
+    row. `channel_indices` should already be filtered to the channels the user
+    chose to export (and is used in the given order for column order).
+
+    Parameters
+    ----------
+    session : Session — must have neural data loaded.
+    channel_indices : list[int] — 0-based channel indices to include.
+    animal : str — animal ID.
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    sig = get_analog_signal(session.block, 0)
+    sig_info = session.analog_signal_summaries[0]
+    labels = sig_info["channel_labels"]
+    full_duration = sig_info["duration_sec"]
+
+    t = None
+    columns = {}
+    for ch in channel_indices:
+        tt, y, _ = extract_time_window(sig, ch, 0, full_duration)
+        if t is None:
+            t = tt
+        columns[labels[ch]] = y
+
+    return pd.DataFrame({"animal": animal, "time": t, **columns})

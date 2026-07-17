@@ -1,11 +1,18 @@
 """Central configuration and default parameters for neurodash."""
 
+from pathlib import Path
+
 
 APP_TITLE = "neurodash"
 
 # Default starting directory for file picker dialogs
 DEFAULT_FILE_DIR = "C:/Users/Eric/data/fear/plexon"
 LOGO_PATH = "/assets/logo/neurodash_logo_200.png"
+
+# CSV exports are written here (server-side), NOT the browser's download folder.
+# To save alongside the raw data instead, set this to the source file's directory
+# at export time.
+EXPORT_DIR = Path.home() / ".neurodash" / "data"
 
 # Default initial time window shown in the main plot (seconds).
 # Full session is always computed; this just sets the starting viewport.
@@ -18,9 +25,9 @@ DEFAULT_SPECT_WINDOW_SEC = 2.0
 DEFAULT_SPECT_STEP_SEC = 0.1
 DEFAULT_SPECT_C_PARAM = 20
 
-# Channel QC
-QC_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
-QC_ROW_HEIGHT = 160  # px per channel row in the combined QC figure
+# Channel Viewer
+CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
+CHANNEL_ROW_HEIGHT = 160  # px per channel row in the combined channel figure
 EXEMPLAR_SEEDS_DEFAULT_CHANNEL = True  # exemplar seeds the viewer's default channel
 
 # ---------------------------------------------------------------------------
