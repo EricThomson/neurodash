@@ -115,11 +115,13 @@ def save_channels(pl2_path, channel_data):
 
 
 def channels_to_dataframe(channel_data):
-    """Flatten channel annotations to the JMP-ready `channels` export schema.
+    """Flatten channel annotations to a tidy per-channel table.
 
-    One row per channel: animal, channel, quality, comment, exemplar. `animal`
-    is the same for every row (single-animal), so combining across animals later
-    is a plain concat.
+    One row per exported channel: animal, channel, quality, comment, exemplar.
+    Not currently wired into an export (the single-animal neural CSV carries this
+    metadata in its `#` header instead) — retained for the planned multi-animal
+    combine step, where a cross-animal QC table (plain concat on `animal`) is the
+    natural JMP artifact.
     """
     animal = channel_data.get("animal", "")
     exemplar = channel_data.get("exemplar_channel_index")
@@ -133,7 +135,7 @@ def channels_to_dataframe(channel_data):
         }
         for key, entry in sorted(channel_data.get("channels", {}).items(),
                                  key=lambda kv: int(kv[0]))
-        if entry.get("include", True)  # only export channels the user kept checked
+        if entry.get("include", True)  # only channels the user kept checked
     ]
     return pd.DataFrame(
         rows,
