@@ -11,6 +11,9 @@ from neurodash.config import (
     DEFAULT_SPECT_WINDOW_SEC,
     DEFAULT_SPECT_STEP_SEC,
     DEFAULT_SPECT_C_PARAM,
+    DEFAULT_THETA_LOW_HZ,
+    DEFAULT_THETA_HIGH_HZ,
+    DEFAULT_THETA_DOT_SIZE,
     LOGO_PATH,
     CHANNEL_QUALITY_OPTIONS,
     CHANNEL_ROW_HEIGHT,
@@ -73,6 +76,15 @@ def _left_sidebar():
                         options=[{"label": " Show spectrogram", "value": "on"}],
                         value=[],
                         style={"marginTop": "6px"},
+                    ),
+                    dcc.Checklist(
+                        id="toggle-theta",
+                        options=[
+                            {"label": " Show theta peak", "value": "peak"},
+                            {"label": " Show theta power", "value": "power"},
+                        ],
+                        value=[],
+                        style={"marginTop": "2px"},
                     ),
                 ],
                 style=_NEURAL_SECTION,
@@ -144,23 +156,28 @@ def _right_sidebar():
                 style={"width": "100%", "marginBottom": "12px"},
             ),
 
-            # --- Spectrogram controls (visible when toggled on) ---
+            # --- Analysis channel — the single channel the spectrogram and theta
+            # channels are computed on. Session Viewer only (the Channel Viewer
+            # shows all channels). Seeded from the starred exemplar. ---
+            html.Div(
+                [
+                    html.Label("Analysis channel", style={"fontSize": "0.8em"}),
+                    dcc.Dropdown(
+                        id="dropdown-spectrogram-channel",
+                        placeholder="Channel...",
+                        style={"marginBottom": "6px"},
+                    ),
+                ],
+                id="div-analysis-channel",
+                style={"display": "none"},
+            ),
+
+            # --- Spectrogram params (visible when the spectrogram or a theta
+            # channel is on, and always on the Channel Viewer). Theta rides on
+            # these same params. ---
             html.Div(
                 [
                     html.Div("Spectrogram", style=_SECTION_HEADER),
-                    # Channel selector applies only to the Session Viewer's single
-                    # spectrogram; hidden on the Channel Viewer (all channels shown).
-                    html.Div(
-                        [
-                            html.Label("Channel", style={"fontSize": "0.8em"}),
-                            dcc.Dropdown(
-                                id="dropdown-spectrogram-channel",
-                                placeholder="Channel...",
-                                style={"marginBottom": "6px"},
-                            ),
-                        ],
-                        id="div-spect-channel-select",
-                    ),
                     html.Label("Window (s)", style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-spect-window",
@@ -199,6 +216,63 @@ def _right_sidebar():
                     ),
                 ],
                 id="div-spectrogram-controls",
+                style={"display": "none"},
+            ),
+
+            # --- Theta band + export (visible when a theta channel is on). ---
+            html.Div(
+                [
+                    html.Div("Theta", style=_SECTION_HEADER),
+                    html.Label("Low (Hz)", style={"fontSize": "0.8em"}),
+                    dcc.Input(
+                        id="input-theta-low",
+                        type="number",
+                        value=DEFAULT_THETA_LOW_HZ,
+                        min=0.5, step=0.5,
+                        debounce=True,
+                        style={"width": "100%", "marginBottom": "6px"},
+                    ),
+                    html.Label("High (Hz)", style={"fontSize": "0.8em"}),
+                    dcc.Input(
+                        id="input-theta-high",
+                        type="number",
+                        value=DEFAULT_THETA_HIGH_HZ,
+                        min=1, step=0.5,
+                        debounce=True,
+                        style={"width": "100%", "marginBottom": "8px"},
+                    ),
+                    # Peak overlay appearance (line rides on the spectrogram)
+                    html.Label("Peak line", style={"fontSize": "0.8em"}),
+                    dcc.RadioItems(
+                        id="radio-theta-peak-color",
+                        options=[{"label": " Black", "value": "black"},
+                                 {"label": " White", "value": "white"}],
+                        value="black",
+                        inline=True,
+                        style={"fontSize": "0.85em"},
+                    ),
+                    dcc.Checklist(
+                        id="toggle-theta-peak-markers",
+                        options=[{"label": " Dots", "value": "dots"}],
+                        value=["dots"],
+                        style={"fontSize": "0.85em", "marginBottom": "4px"},
+                    ),
+                    html.Label("Dot size", style={"fontSize": "0.8em"}),
+                    dcc.Input(
+                        id="input-theta-dot-size",
+                        type="number",
+                        value=DEFAULT_THETA_DOT_SIZE,
+                        min=1, max=20, step=0.5,
+                        debounce=True,
+                        style={"width": "100%", "marginBottom": "8px"},
+                    ),
+                    html.Button("Download theta CSV",
+                                id="btn-download-theta-csv", n_clicks=0),
+                    html.Div(id="div-theta-export-status",
+                             style={"marginTop": "6px", "color": "#999",
+                                    "fontSize": "0.85em"}),
+                ],
+                id="div-theta-controls",
                 style={"display": "none"},
             ),
         ],
@@ -272,11 +346,17 @@ def make_layout():
                                 id="main-plot",
                                 responsive=True,
                                 style={"display": "none", "height": "calc(100vh - 120px)"},
-                                config={"toImageButtonOptions": {
-                                    "format": "png",
-                                    "filename": "neurodash_session",
-                                    "scale": 2,
-                                }},
+                                config={
+                                    # scroll = zoom x, drag = pan x. y-axes are all
+                                    # fixedrange=True, so zoom is x-only by construction.
+                                    "scrollZoom": True,
+                                    "displaylogo": False,
+                                    "toImageButtonOptions": {
+                                        "format": "png",
+                                        "filename": "neurodash_session",
+                                        "scale": 2,
+                                    },
+                                },
                             ),
                         ],
                         id="div-viewer-content",

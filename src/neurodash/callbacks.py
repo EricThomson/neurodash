@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from dash import (
     Input, Output, State, ALL, callback, clientside_callback, ctx, dcc, html, no_update,
 )
@@ -15,6 +16,8 @@ from dash import (
 from neurodash.config import (
     DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
+    DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
+    DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
@@ -24,7 +27,9 @@ from neurodash.behavior_io import (
 )
 from neurodash.neural_io import get_analog_signal, extract_time_window, build_neural_table
 from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_channel_figure
-from neurodash.session import load_session_from_paths, compute_spectrogram
+from neurodash.session import (
+    load_session_from_paths, compute_spectrogram, compute_theta_channels,
+)
 from neurodash.channel_io import load_channels, save_channels
 from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
 
@@ -199,28 +204,56 @@ clientside_callback(
 )
 
 
+# Scroll/zoom changes the view width — mirror it back into the View duration
+# input so the RHS controls stay in sync. Guarded on the last-synced value so it
+# doesn't re-trigger the view-controls callback in a loop.
+clientside_callback(
+    """
+    function(viewRange) {
+        if (!viewRange) return window.dash_clientside.no_update;
+        var rounded = Math.round(viewRange[1] - viewRange[0]);
+        if (rounded <= 0) return window.dash_clientside.no_update;
+        var current = window._neurodash_last_synced_dur;
+        if (current === rounded) return window.dash_clientside.no_update;
+        window._neurodash_last_synced_dur = rounded;
+        return rounded;
+    }
+    """,
+    Output("input-window-duration", "value"),
+    Input("store-view-range", "data"),
+    prevent_initial_call=True,
+)
+
+
 # ---------------------------------------------------------------------------
-# Spectrogram controls visibility — show/hide with toggle
+# Spectrogram / theta controls visibility — show/hide with toggles
 # ---------------------------------------------------------------------------
 
 clientside_callback(
     """
-    function(toggleValue, tabValue) {
-        var toggled = toggleValue && toggleValue.indexOf("on") !== -1;
+    function(spectValue, thetaValue, tabValue) {
+        var spectOn = spectValue && spectValue.indexOf("on") !== -1;
+        var thetaOn = thetaValue && thetaValue.length > 0;
         var onChannels = tabValue === "channels";
-        /* Params: shown when the Session Viewer spectrogram is on, and always
-           on the Channel Viewer. Channel selector: Session Viewer only. */
-        var showParams = toggled || onChannels;
-        var showChannel = toggled && !onChannels;
+        /* Analysis channel: any single-channel analysis, Session Viewer only.
+           Spectrogram params: spectrogram OR theta on (theta rides on them),
+           and always on the Channel Viewer. Theta band: theta on, Session
+           Viewer only. */
+        var showChannel = (spectOn || thetaOn) && !onChannels;
+        var showSpectParams = spectOn || thetaOn || onChannels;
+        var showTheta = thetaOn && !onChannels;
         return [
-            {"display": showParams ? "block" : "none"},
-            {"display": showChannel ? "block" : "none"}
+            {"display": showChannel ? "block" : "none"},
+            {"display": showSpectParams ? "block" : "none"},
+            {"display": showTheta ? "block" : "none"}
         ];
     }
     """,
+    Output("div-analysis-channel", "style"),
     Output("div-spectrogram-controls", "style"),
-    Output("div-spect-channel-select", "style"),
+    Output("div-theta-controls", "style"),
     Input("toggle-spectrogram", "value"),
+    Input("toggle-theta", "value"),
     Input("tabs-main", "value"),
     prevent_initial_call=True,
 )
@@ -249,6 +282,10 @@ clientside_callback(
             x0 = (jumpTo != null && jumpTo >= 0) ? jumpTo : x0;
             x1 = x0 + windowDuration;
         } else {
+            // Window duration changed. If it already matches the current view
+            // width (e.g. it was just synced from a scroll/zoom), leave the view
+            // alone — otherwise we'd re-center and undo the cursor-centered zoom.
+            if (currentRange && Math.abs((x1 - x0) - windowDuration) < 0.5) return NU;
             var center = (x0 + x1) / 2;
             x0 = center - windowDuration / 2;
             x1 = center + windowDuration / 2;
@@ -292,16 +329,24 @@ clientside_callback(
     Input("input-spect-step", "value"),
     Input("input-spect-c-param", "value"),
     Input("input-spect-max-freq", "value"),
+    Input("toggle-theta", "value"),
+    Input("input-theta-low", "value"),
+    Input("input-theta-high", "value"),
+    Input("radio-theta-peak-color", "value"),
+    Input("toggle-theta-peak-markers", "value"),
+    Input("input-theta-dot-size", "value"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   spect_channel, spect_window, spect_step, spect_c, spect_max_freq,
-                  view_range):
+                  theta_toggle, theta_low, theta_high, peak_color, peak_markers,
+                  peak_dot_size, view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
     channels = selected_channels or [0]
+    theta_toggle = theta_toggle or []
     controls = {
         "raw_channel_indices": channels,
         "show_spectrogram": "on" in (spect_toggle or []),
@@ -310,6 +355,13 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "spect_step_sec": spect_step or DEFAULT_SPECT_STEP_SEC,
         "spect_c_param": spect_c or DEFAULT_SPECT_C_PARAM,
         "spect_max_freq": spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
+        "show_theta_peak": "peak" in theta_toggle,
+        "show_theta_power": "power" in theta_toggle,
+        "theta_band": (theta_low or DEFAULT_THETA_LOW_HZ,
+                       theta_high or DEFAULT_THETA_HIGH_HZ),
+        "theta_peak_color": peak_color or "black",
+        "theta_peak_markers": "dots" in (peak_markers or []),
+        "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
     }
     fig = plot_session_view(session, controls)
     if fig is None:
@@ -741,6 +793,22 @@ def _behavior_header(behavior_path, session, animal):
     return "\n".join(lines)
 
 
+def _theta_header(session, channel_data, channel_index, band, window, step, c):
+    """Header block for the theta CSV: animal, provenance, analysis channel, and
+    the parameters the peak/power were computed with (so the export is reproducible).
+    """
+    sig_info = session.analog_signal_summaries[0]
+    label = sig_info["channel_labels"][channel_index]
+    lines = [f"animal: {channel_data.get('animal') or 'Unknown'}"]
+    if session.pl2_path:
+        lines.append(f"source: {Path(session.pl2_path).name}")
+    lines.append(f"analysis_channel: {label}")
+    lines.append(f"theta_band_hz: {band[0]}-{band[1]}")
+    lines.append(f"spectrogram: window={window}s step={step}s c={c}")
+    lines += _comment_lines(channel_data.get("comment"))
+    return "\n".join(lines)
+
+
 @callback(
     Output("div-channel-export-status", "children"),
     Input("btn-download-channel-csv", "n_clicks"),
@@ -788,6 +856,52 @@ def export_behavior_csv(n_clicks, behavior_path, neural_path):
     df = build_behavior_table(session.behavior_data, animal)
     out = _write_export(df, f"{Path(behavior_path).stem}_behavior.csv",
                         comment=_behavior_header(behavior_path, session, animal))
+    return f"Saved to {out}"
+
+
+@callback(
+    Output("div-theta-export-status", "children"),
+    Input("btn-download-theta-csv", "n_clicks"),
+    State("store-neural-path", "data"),
+    State("dropdown-spectrogram-channel", "value"),
+    State("input-theta-low", "value"),
+    State("input-theta-high", "value"),
+    State("input-spect-window", "value"),
+    State("input-spect-step", "value"),
+    State("input-spect-c-param", "value"),
+    State("input-spect-max-freq", "value"),
+    prevent_initial_call=True,
+)
+def export_theta_csv(n_clicks, neural_path, channel, theta_low, theta_high,
+                     spect_window, spect_step, spect_c, spect_max_freq):
+    """Write the theta channels (animal, time, peak_hz, power_db) for the analysis
+    channel to CSV — the same series shown in the Session Viewer.
+    """
+    if not neural_path:
+        return no_update
+    session = load_session_from_paths(neural_path, "")
+    channel_data = load_channels(session.pl2_path, session)
+    animal = channel_data.get("animal")
+    if not animal:
+        return _NO_ANIMAL_HINT
+
+    ch = channel if channel is not None else 0
+    sig_info = session.analog_signal_summaries[0]
+    band = (theta_low or DEFAULT_THETA_LOW_HZ, theta_high or DEFAULT_THETA_HIGH_HZ)
+    window = spect_window or DEFAULT_SPECT_WINDOW_SEC
+    step = spect_step or DEFAULT_SPECT_STEP_SEC
+    c = spect_c or DEFAULT_SPECT_C_PARAM
+    times, peak, power = compute_theta_channels(
+        str(session.pl2_path), 0, ch, sig_info["duration_sec"],
+        spect_max_freq or DEFAULT_SPECT_MAX_FREQ, window, step, c,
+        band[0], band[1], DEFAULT_THETA_INTERP_STEP_HZ, DEFAULT_THETA_SMOOTH_WIDTH,
+    )
+    df = pd.DataFrame({
+        "animal": animal, "time": times,
+        "theta_peak_hz": peak, "theta_power_db": power,
+    })
+    out = _write_export(df, f"{Path(neural_path).stem}_theta.csv",
+                        comment=_theta_header(session, channel_data, ch, band, window, step, c))
     return f"Saved to {out}"
 
 

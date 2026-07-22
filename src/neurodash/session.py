@@ -10,6 +10,10 @@ Python process so module-level lru_cache works fine.
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
+
+from neurodash import config
+from neurodash import spectral_utils
 from neurodash.neural_io import load_pl2_block, list_analog_signal_summaries, get_analog_signal, extract_time_window
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import load_behavior_file
@@ -93,6 +97,56 @@ def compute_spectrogram(
         max_frequency=max_frequency,
     )
     return freqs, times, power_db
+
+
+@lru_cache(maxsize=8)
+def compute_theta_channels(
+    pl2_path_str,
+    analog_signal_index,
+    channel_index,
+    duration_sec,
+    max_frequency,
+    window_duration,
+    step_duration,
+    c_parameter,
+    theta_low,
+    theta_high,
+    interp_step,
+    smooth_width,
+):
+    """Peak-theta-frequency and theta-band-power time series for one channel.
+
+    Both are derived from the same cached spectrogram the Session Viewer uses, so
+    turning theta on for a channel whose spectrogram is already shown adds only
+    the cheap band reduction on top. Returns (times, theta_peak_hz, theta_power_db).
+
+    Keys on pl2_path_str (+ params) for lru_cache hashability, mirroring
+    ``compute_spectrogram``.
+    """
+    freqs, times, power_db = compute_spectrogram(
+        pl2_path_str,
+        analog_signal_index,
+        channel_index,
+        0.0,
+        duration_sec,
+        max_frequency,
+        window_duration,
+        step_duration,
+        c_parameter,
+    )
+    # The spectrogram is stored in dB; peak/power work on linear power. Smooth in
+    # time first so the argmax peak doesn't hop between adjacent frequency bins.
+    power = spectral_utils.db_to_linear(power_db)
+    power = spectral_utils.smooth_time(power, config.THETA_SPECT_TIME_SMOOTH_WIDTH)
+
+    band = (theta_low, theta_high)
+    peak = spectral_utils.theta_peak_frequency(freqs, power, band, interp_step)
+    band_power = spectral_utils.theta_band_power(freqs, power, band)
+    power_db_series = 10.0 * np.log10(band_power + 1e-12)
+
+    peak = spectral_utils.smooth_series(peak, smooth_width)
+    power_db_series = spectral_utils.smooth_series(power_db_series, smooth_width)
+    return times, peak, power_db_series
 
 
 # ---------------------------------------------------------------------------

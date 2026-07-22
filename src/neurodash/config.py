@@ -30,6 +30,19 @@ CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
 CHANNEL_ROW_HEIGHT = 160  # px per channel row in the combined channel figure
 EXEMPLAR_SEEDS_DEFAULT_CHANNEL = True  # exemplar seeds the viewer's default channel
 
+# Theta analysis (Phase 1: peak frequency + band power for one channel).
+# Both are derived from the same spectrogram the Session Viewer already computes,
+# on the shared "analysis channel" (the spectrogram channel selector).
+DEFAULT_SHOW_THETA_PEAK = False
+DEFAULT_SHOW_THETA_POWER = False
+DEFAULT_THETA_LOW_HZ = 4.0          # theta band lower edge
+DEFAULT_THETA_HIGH_HZ = 12.0        # theta band upper edge
+DEFAULT_THETA_INTERP_STEP_HZ = 0.1  # fine grid for sub-bin peak-frequency precision
+DEFAULT_THETA_SMOOTH_WIDTH = 9      # Hann window (bins) smoothing the output series
+THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogram in time
+                                    # before peak extraction (stabilizes the argmax)
+DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
+
 # ---------------------------------------------------------------------------
 # TEMPORARY dev convenience: autoload these files on startup so you don't have
 # to browse for them every run. Flip AUTOLOAD_ON_STARTUP to False to disable,

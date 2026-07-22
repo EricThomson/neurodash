@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 from neurodash import config
 from neurodash.neural_io import get_analog_signal, extract_time_window
 from neurodash.behavior_io import extract_position
-from neurodash.session import compute_spectrogram
+from neurodash.session import compute_spectrogram, compute_theta_channels
 
 
 def plot_behavior_view(session):
@@ -68,6 +68,12 @@ def plot_session_view(session, controls):
         panels.append(("neural", _plot_lfp))
         if controls.get("show_spectrogram"):
             panels.append(("spectrogram", _plot_spectrogram))
+        # Theta peak overlays on the spectrogram when it's shown (see
+        # _plot_spectrogram); it only needs its own panel when the heatmap is off.
+        if controls.get("show_theta_peak") and not controls.get("show_spectrogram"):
+            panels.append(("theta_peak", _plot_theta_peak))
+        if controls.get("show_theta_power"):
+            panels.append(("theta_power", _plot_theta_power))
 
     if session.has_behavior:
         if controls.get("show_velocity", True):
@@ -281,11 +287,131 @@ def _plot_spectrogram(fig, row, session, controls):
         ),
         row=row, col=1,
     )
+
+    # Overlay theta peak (a frequency) as a black line+dots when requested — it
+    # rides on the spectrogram's own frequency axis, most visible where theta is
+    # strong (matches the marker='.' overlay from the notebook). Very light dashed
+    # guides mark the theta band edges (the window the peak is searched in).
+    if controls.get("show_theta_peak"):
+        low, high = controls.get(
+            "theta_band", (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
+        for edge in (low, high):
+            fig.add_hline(
+                y=edge, row=row, col=1,
+                line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dash"),
+            )
+        try:
+            t_theta, peak, _power = _theta_channels(session, controls)
+            fig.add_trace(_theta_peak_trace(t_theta, peak, controls), row=row, col=1)
+        except Exception as e:
+            print(f"ERROR overlaying theta peak: {e}")
+
     fig.update_yaxes(
         title_text=f"Freq (Hz) — {channel_labels[ch]}",
         range=[0, controls.get("spect_max_freq", 90.0)], fixedrange=True,
         row=row, col=1,
     )
+
+
+# --- Theta channels (peak frequency + band power) — derived from the
+# spectrogram on the shared analysis channel. Both call the cached
+# compute_theta_channels, so the two panels share one computation. ---
+
+def _theta_channels(session, controls):
+    """Fetch (times, peak_hz, power_db) for the analysis channel from cache."""
+    sig_info = session.analog_signal_summaries[0]
+    ch = controls.get("spectrogram_channel_index", 0)
+    band = controls.get("theta_band",
+                        (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
+    return compute_theta_channels(
+        str(session.pl2_path),
+        controls.get("analog_signal_index", 0),
+        ch,
+        sig_info["duration_sec"],
+        controls.get("spect_max_freq", config.DEFAULT_SPECT_MAX_FREQ),
+        controls.get("spect_window_sec", config.DEFAULT_SPECT_WINDOW_SEC),
+        controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC),
+        controls.get("spect_c_param", config.DEFAULT_SPECT_C_PARAM),
+        band[0], band[1],
+        config.DEFAULT_THETA_INTERP_STEP_HZ,
+        config.DEFAULT_THETA_SMOOTH_WIDTH,
+    )
+
+
+def _theta_error(fig, row, message):
+    axis_suffix = "" if row == 1 else str(row)
+    fig.add_annotation(
+        text=message,
+        xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+        x=0.5, y=0.5, showarrow=False,
+    )
+
+
+def _theta_peak_trace(x, y, controls):
+    """The theta-peak line, styled by the right-sidebar controls (color + dots).
+
+    Shared by the spectrogram overlay and the standalone panel so they match.
+    """
+    color = controls.get("theta_peak_color", "black")
+    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
+    return go.Scattergl(
+        x=x, y=y, mode=mode,
+        line=dict(color=color, width=1.0),
+        marker=dict(color=color, size=size),
+        name="Theta peak",
+    )
+
+
+def _plot_theta_peak(fig, row, session, controls):
+    band = controls.get("theta_band",
+                        (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
+    try:
+        times, peak, _power = _theta_channels(session, controls)
+    except Exception as e:
+        print(f"ERROR in _plot_theta_peak: {e}")
+        _theta_error(fig, row, f"Theta peak error: {e}")
+        return
+    fig.add_trace(_theta_peak_trace(times, peak, controls), row=row, col=1)
+    # Channel is shown on the spectrogram/LFP; keep this title short (theta glyph)
+    # so it doesn't crowd its neighbors on a thin panel.
+    fig.update_yaxes(
+        title_text="θ Peak (Hz)",
+        range=[band[0], band[1]], fixedrange=True,
+        row=row, col=1,
+    )
+
+
+def _plot_theta_power(fig, row, session, controls):
+    try:
+        times, _peak, power = _theta_channels(session, controls)
+    except Exception as e:
+        print(f"ERROR in _plot_theta_power: {e}")
+        _theta_error(fig, row, f"Theta power error: {e}")
+        return
+    # Dots + size track the theta-peak controls (same time bins, so they line up);
+    # colour stays teal to match this panel's line.
+    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
+    fig.add_trace(
+        go.Scattergl(x=times, y=power, mode=mode,
+                     line=dict(color="teal", width=1.0),
+                     marker=dict(color="teal", size=size)),
+        row=row, col=1,
+    )
+    fig.update_yaxes(
+        title_text="θ Power (dB)",
+        range=list(_theta_power_ylim(power)), fixedrange=True,
+        row=row, col=1,
+    )
+
+
+def _theta_power_ylim(power):
+    """Robust y-range for the theta-power panel, padded off the 1/99 pcts."""
+    lo = float(np.nanpercentile(power, 1))
+    hi = float(np.nanpercentile(power, 99))
+    pad = 0.05 * (hi - lo) if hi > lo else 1.0
+    return (lo - pad, hi + pad)
 
 
 def _plot_position(fig, row, session, controls):
