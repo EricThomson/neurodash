@@ -9,6 +9,7 @@ Uses the same json.dump / json.load idiom as the pyqtdash handoff in callbacks.p
 """
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -24,17 +25,19 @@ def channel_sidecar_path(pl2_path):
 
 
 def parse_animal_id(pl2_path):
-    """Best-effort animal ID from a pl2 filename.
+    """Best-effort animal ID from a pl2 filename: the last token, splitting on
+    whitespace *or* underscores. Handles both conventions seen in the wild —
+    '170505_open_field_theta_FC33-4' and '170505 open field theta FC33-4' both
+    -> 'FC33-4'. Single-animal only; returns '' when no path is given.
 
-    Takes the last '_'-delimited token of the stem, e.g.
-    '170505_open_field_theta_FC33-4' -> 'FC33-4'. Single-animal only; returns
-    '' when no path is given. The value is editable + persisted in the sidecar,
-    so a bad guess is correctable in the Channel Viewer.
+    Read-only in the UI (always re-derived from the filename on load), so if a
+    filename doesn't end in the animal token the fix is to rename the file — see
+    the filename-handling note in CLAUDE.md.
     """
     if not pl2_path:
         return ""
-    stem = Path(pl2_path).stem
-    return stem.split("_")[-1] if stem else ""
+    stem = Path(pl2_path).stem.strip()
+    return re.split(r"[\s_]+", stem)[-1] if stem else ""
 
 
 def _empty_channel_entries(session):

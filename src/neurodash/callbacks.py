@@ -14,13 +14,14 @@ from dash import (
 )
 
 from neurodash.config import (
-    DEFAULT_FILE_DIR, DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
+    DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
+from neurodash.app_state import last_browse_dir, remember_browse_dir
 from neurodash.file_picker import pick_file
 from neurodash.behavior_io import (
     get_display_metadata, build_behavior_table, load_behavior_notes, save_behavior_notes,
@@ -55,9 +56,10 @@ def browse_neural(n_clicks):
             return (no_update,) * 7
         path = AUTOLOAD_NEURAL_PATH
     else:
-        path = pick_file("Select .pl2 file", "Plexon (*.pl2)", DEFAULT_FILE_DIR)
+        path = pick_file("Select .pl2 file", "Plexon (*.pl2)", last_browse_dir())
     if not path:
         return (no_update,) * 7
+    remember_browse_dir(path)
 
     session = load_session_from_paths(path, "")
     sig_info = session.analog_signal_summaries[0]
@@ -108,9 +110,10 @@ def browse_behavior(n_clicks):
             return no_update, no_update, no_update
         path = AUTOLOAD_BEHAVIOR_PATH
     else:
-        path = pick_file("Select behavior file", "Excel (*.xlsx)", DEFAULT_FILE_DIR)
+        path = pick_file("Select behavior file", "Excel (*.xlsx)", last_browse_dir())
     if not path:
         return no_update, no_update, no_update
+    remember_browse_dir(path)
 
     session = load_session_from_paths("", path)
     info = get_display_metadata(session.behavior_metadata)
@@ -363,14 +366,16 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_markers": "dots" in (peak_markers or []),
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
     }
-    fig = plot_session_view(session, controls)
+    fig, content_px = plot_session_view(session, controls)
     if fig is None:
         return no_update, no_update, no_update
 
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
     fig.update_xaxes(range=[x0, x1], autorange=False)
-    # Keep the viewport-fit height when un-hiding (this replaces the whole style).
-    return fig, {"display": "block", "height": "calc(100vh - 120px)"}, {"display": "none"}
+    # Size to content but never exceed the viewport: a lone LFP panel is a top
+    # strip; a full stack fills the screen without scrolling.
+    graph_height = f"min({content_px}px, calc(100vh - 120px))"
+    return fig, {"display": "block", "height": graph_height}, {"display": "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +569,7 @@ def _spect_params(window, step, c, max_freq):
     Output("div-channel-animal", "children"),
     Output("input-channel-comment", "value"),
     Input("tabs-main", "value"),
-    State("store-neural-path", "data"),
+    Input("store-neural-path", "data"),
     State("store-view-range", "data"),
     State("input-spect-window", "value"),
     State("input-spect-step", "value"),
@@ -574,7 +579,10 @@ def _spect_params(window, step, c, max_freq):
 )
 def render_channel_tab(tab_value, neural_path, view_range,
                        spect_window, spect_step, spect_c, spect_max_freq):
-    """Lazily build the Channel Viewer when its tab is opened, at the current window."""
+    """Build the Channel Viewer when its tab is opened *or* a new file is loaded,
+    at the current window. Refreshing on file load (not just tab switch) keeps the
+    comment/annotations tied to the loaded recording — no stale bleed from a
+    previously-loaded file."""
     if tab_value != "channels":
         return no_update, no_update, no_update, no_update
     if not neural_path:

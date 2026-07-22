@@ -6,7 +6,7 @@ from pathlib import Path
 APP_TITLE = "neurodash"
 
 # Default starting directory for file picker dialogs
-DEFAULT_FILE_DIR = "C:/Users/Eric/data/fear/plexon"
+DEFAULT_FILE_DIR = "C:/Users/Eric/data/open_field_data"
 LOGO_PATH = "/assets/logo/neurodash_logo_200.png"
 
 # CSV exports are written here (server-side), NOT the browser's download folder.
@@ -17,6 +17,12 @@ EXPORT_DIR = Path.home() / ".neurodash" / "data"
 # Default initial time window shown in the main plot (seconds).
 # Full session is always computed; this just sets the starting viewport.
 DEFAULT_VIEW_DURATION = 30.0
+
+# Session Viewer figure height: pixels per unit of panel "weight"
+# (spectrogram=3, LFP=2, behavioral=1), capped at the viewport. So a lone LFP
+# panel (~2 units) is a top strip instead of filling the whole screen, while a
+# full stack still fits the viewport without scrolling.
+SESSION_PANEL_UNIT_PX = 150
 
 # Spectrogram defaults (opt-in)
 DEFAULT_SHOW_SPECTROGRAM = False
@@ -49,6 +55,6 @@ DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dot
 # or delete this block once neurodash is where you want it (see the autoload
 # branches in callbacks.browse_neural / browse_behavior).
 # ---------------------------------------------------------------------------
-AUTOLOAD_ON_STARTUP = True
+AUTOLOAD_ON_STARTUP = False
 AUTOLOAD_NEURAL_PATH = "C:/Users/Eric/data/fear/plexon/170505_open_field_theta_FC33-4.pl2"
 AUTOLOAD_BEHAVIOR_PATH = "C:/Users/Eric/data/fear/plexon/Raw data-260129_Zhenglin_openfield_pipelinepilot-Trial 5.xlsx"

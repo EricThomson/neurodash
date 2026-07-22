@@ -59,8 +59,10 @@ def plot_behavior_view(session):
 def plot_session_view(session, controls):
     """Render the main panel figure for the current session and controls.
 
-    Handles neural-only, behavior-only, and combined sessions.
-    Returns None if there is nothing to plot.
+    Handles neural-only, behavior-only, and combined sessions. Returns
+    ``(figure, content_px)`` where content_px is the figure's natural height
+    (panel weight x SESSION_PANEL_UNIT_PX) so the caller can size it to content
+    and cap it at the viewport; ``(None, 0)`` when there is nothing to plot.
     """
     panels = []  # list of (label, plot_fn) to stack vertically
 
@@ -85,7 +87,7 @@ def plot_session_view(session, controls):
             panels.append(("mobility", _plot_mobility))
 
     if not panels:
-        return None
+        return None, 0
 
     n = len(panels)
     # Spectrogram is most important. LFP is 2/3 of spectrogram. Behavioral panels smallest.
@@ -96,6 +98,7 @@ def plot_session_view(session, controls):
     height_ratios = [_height(label) for label, _ in panels]
     total = sum(height_ratios)
     row_heights = [h / total for h in height_ratios]
+    content_px = total * config.SESSION_PANEL_UNIT_PX
 
     fig = make_subplots(
         rows=n, cols=1,
@@ -127,7 +130,7 @@ def plot_session_view(session, controls):
         hovermode=False,
     )
 
-    return fig
+    return fig, content_px
 
 
 # ---------------------------------------------------------------------------

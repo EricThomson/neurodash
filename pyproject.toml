@@ -32,6 +32,8 @@ dependencies = [
   # pyqtdash viewer
   "pyqt6",
   "pyqtgraph",
+  # single-instance launcher (map port -> PID for `neurodash --restart`)
+  "psutil",
 ]
 
 [project.urls]
