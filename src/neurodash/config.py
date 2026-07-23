@@ -55,6 +55,6 @@ DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dot
 # or delete this block once neurodash is where you want it (see the autoload
 # branches in callbacks.browse_neural / browse_behavior).
 # ---------------------------------------------------------------------------
-AUTOLOAD_ON_STARTUP = False
+AUTOLOAD_ON_STARTUP = True
 AUTOLOAD_NEURAL_PATH = "C:/Users/Eric/data/fear/plexon/170505_open_field_theta_FC33-4.pl2"
 AUTOLOAD_BEHAVIOR_PATH = "C:/Users/Eric/data/fear/plexon/Raw data-260129_Zhenglin_openfield_pipelinepilot-Trial 5.xlsx"

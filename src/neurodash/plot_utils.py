@@ -120,6 +120,13 @@ def plot_session_view(session, controls):
 
     fig.update_xaxes(title_text="Time (s)", row=n, col=1)
     fig.update_xaxes(autorange=False)
+    # Scrub crosshair: a vertical spike line at the cursor's time spanning every
+    # panel (spikemode="across"), following the mouse (spikesnap="cursor"). With
+    # hovermode="x" each panel shows its value at that time as you move over it.
+    fig.update_xaxes(
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikethickness=1, spikedash="dot", spikecolor="#888",
+    )
     # No fixed height — the graph is responsive and fills its container (the
     # viewer pane sizes it to the viewport), so all panels fit without scrolling.
     fig.update_layout(
@@ -127,7 +134,8 @@ def plot_session_view(session, controls):
         margin=dict(l=60, r=20, t=20, b=40),
         dragmode="pan",
         showlegend=False,
-        hovermode=False,
+        hovermode="x",
+        spikedistance=-1,
     )
 
     return fig, content_px
@@ -231,6 +239,7 @@ def _plot_lfp(fig, row, session, controls):
                 x=ts, y=y_norm,
                 mode="lines",
                 line=dict(width=0.8),
+                hoverinfo="skip",  # LFP is normalized for display; its y isn't µV
             ),
             row=row, col=1,
         )
@@ -287,6 +296,7 @@ def _plot_spectrogram(fig, row, session, controls):
             colorscale="Inferno",
             showscale=False,
             name=f"Spectrogram ({channel_labels[ch]})",
+            hovertemplate="%{y:.1f} Hz, %{z:.1f} dB<extra></extra>",
         ),
         row=row, col=1,
     )
@@ -363,6 +373,7 @@ def _theta_peak_trace(x, y, controls):
         line=dict(color=color, width=1.0),
         marker=dict(color=color, size=size),
         name="Theta peak",
+        hovertemplate="θ peak: %{y:.2f} Hz<extra></extra>",
     )
 
 
@@ -399,7 +410,8 @@ def _plot_theta_power(fig, row, session, controls):
     fig.add_trace(
         go.Scattergl(x=times, y=power, mode=mode,
                      line=dict(color="teal", width=1.0),
-                     marker=dict(color="teal", size=size)),
+                     marker=dict(color="teal", size=size),
+                     hovertemplate="θ power: %{y:.1f} dB<extra></extra>"),
         row=row, col=1,
     )
     fig.update_yaxes(
@@ -422,11 +434,13 @@ def _plot_position(fig, row, session, controls):
     axis_suffix = "" if row == 1 else str(row)
 
     fig.add_trace(
-        go.Scatter(x=t, y=x, mode="lines", line=dict(color="steelblue", width=0.8)),
+        go.Scatter(x=t, y=x, mode="lines", line=dict(color="steelblue", width=0.8),
+                   hovertemplate="X: %{y:.1f} cm<extra></extra>"),
         row=row, col=1,
     )
     fig.add_trace(
-        go.Scatter(x=t, y=y, mode="lines", line=dict(color="coral", width=0.8)),
+        go.Scatter(x=t, y=y, mode="lines", line=dict(color="coral", width=0.8),
+                   hovertemplate="Y: %{y:.1f} cm<extra></extra>"),
         row=row, col=1,
     )
     fig.add_annotation(
@@ -456,6 +470,7 @@ def _plot_velocity(fig, row, session, controls):
             mode="lines",
             name="Velocity",
             line=dict(color="seagreen", width=0.8),
+            hovertemplate="Velocity: %{y:.1f} cm/s<extra></extra>",
         ),
         row=row, col=1,
     )
@@ -476,6 +491,7 @@ def _plot_mobility(fig, row, session, controls):
             mode="lines",
             name="Mobility",
             line=dict(color="darkorange", width=0.8),
+            hovertemplate="Mobility: %{y:.1f}%<extra></extra>",
         ),
         row=row, col=1,
     )
