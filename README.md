@@ -3,15 +3,13 @@
 Lightweight dashboard for exploratory analysis of neurobehavioral data.
 
 ## Usage
-Install
+Install uv locally following the instructions here: https://docs.astral.sh/uv/getting-started/installation/
 
-    pip install neurodash
-  
-Run from command line
+Then, from the command line, install neurodash as a tool using uv:
 
-    neurodash
+  uv tool install neurodash
 
-Application will open in browser. 
+Then, run neurodash by entering `neurodash` at the command line. 
 
 ## Development
 In your cli:
@@ -20,6 +18,7 @@ In your cli:
     cd neurodash
     uv sync
     # activate environment (e.g.,  source .venv/Scripts/activate)
+    # run dashboard
     python app.py
 
 ## Roadmap
