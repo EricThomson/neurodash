@@ -9,6 +9,7 @@ Handoff directory contents:
     handoff.json        — metadata and display settings
     lfp.npz             — pre-normalized LFP traces (if has_neural)
     spectrogram.npz     — pre-computed spectrogram (if show_spectrogram)
+    theta.npz           — pre-computed theta peak frequency (if show_theta_peak)
 """
 
 import json
@@ -85,6 +86,10 @@ class NeurodashViewer(QMainWindow):
         has_neural = handoff.get("has_neural", False)
         show_spectrogram = handoff.get("show_spectrogram", False)
         spectrogram_channel_name = handoff.get("spectrogram_channel_name")
+        # Theta peak is an overlay on the spectrogram, so it never shows without it.
+        show_theta_peak = handoff.get("show_theta_peak", False) and show_spectrogram
+        theta_peak_color = handoff.get("theta_peak_color", "black")
+        theta_band = handoff.get("theta_band")
         t_start = handoff.get("t_start", 0.0)
         window_duration = handoff.get("window_duration", 30.0)
 
@@ -117,6 +122,12 @@ class NeurodashViewer(QMainWindow):
                 self.freqs = spec_data["freqs"]
                 self.spec_times = spec_data["times"]
                 self.power_db = spec_data["power_db"]
+
+            if show_theta_peak:
+                print("Loading theta peak from handoff...")
+                theta_data = np.load(Path(handoff_dir) / "theta.npz")
+                self.theta_times = theta_data["times"]
+                self.theta_peak_hz = theta_data["peak_hz"]
         else:
             self.t_neural = self.t_behav if has_behavior else np.array([0.0])
 
@@ -306,6 +317,28 @@ class NeurodashViewer(QMainWindow):
             ))
             img.setColorMap(pg.colormap.get("inferno"))
             self.spec_plot.addItem(img)
+
+            # Theta peak overlay — no markers, riding the spectrogram's own frequency
+            # axis, in whichever colour the Session Viewer is using. Faint dashed
+            # guides mark the band edges the peak is searched in (as in Dash).
+            # connect="finite" leaves gaps rather than drawing through NaN bins. No
+            # clip/downsample here: it's one point per spectrogram bin (~5k), not the
+            # LFP's ~480k, so it's already cheap.
+            if show_theta_peak:
+                if theta_band:
+                    guide_pen = pg.mkPen(
+                        color=(255, 255, 255, 128), width=1,
+                        style=Qt.PenStyle.DashLine,
+                    )
+                    for edge in theta_band:
+                        self.spec_plot.addItem(
+                            pg.InfiniteLine(pos=float(edge), angle=0, pen=guide_pen)
+                        )
+                self.theta_curve = pg.PlotDataItem(
+                    self.theta_times, self.theta_peak_hz,
+                    pen=pg.mkPen(theta_peak_color, width=1), connect="finite",
+                )
+                self.spec_plot.addItem(self.theta_curve)
 
             self.spec_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
             self.spec_plot.addItem(self.spec_cursor)

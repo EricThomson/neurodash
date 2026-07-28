@@ -420,12 +420,17 @@ _last_handoff_dir = None
     State("input-spect-step", "value"),
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
+    State("toggle-theta", "value"),
+    State("input-theta-low", "value"),
+    State("input-theta-high", "value"),
+    State("radio-theta-peak-color", "value"),
     State("store-view-range", "data"),
     prevent_initial_call=True,
 )
 def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                   selected_channels, spect_toggle, spect_channel,
                   spect_window, spect_step, spect_c, spect_max_freq,
+                  theta_toggle, theta_low, theta_high, theta_peak_color,
                   view_range):
     global _viewer_process, _last_handoff_dir
 
@@ -471,6 +476,10 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
     t_center = x0 + duration / 2
     channels = selected_channels or [0]
     show_spect = "on" in (spect_toggle or [])
+    # Theta peak rides on the spectrogram in the viewer, so it only ships when the
+    # heatmap does (matching the "overlay only" placement there).
+    show_theta_peak = "peak" in (theta_toggle or []) and show_spect
+    theta_band = (theta_low or DEFAULT_THETA_LOW_HZ, theta_high or DEFAULT_THETA_HIGH_HZ)
 
     # Serialize LFP arrays if neural data is loaded
     has_neural = bool(neural_path)
@@ -517,6 +526,24 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                 freqs=freqs, times=times, power_db=power_db,
             )
 
+            # Theta peak: computed here (same cache the figure uses, so this is
+            # usually free) and handed over as a plain array — the viewer only draws it.
+            if show_theta_peak:
+                theta_times, theta_peak, _theta_power = compute_theta_channels(
+                    neural_path, 0, spect_ch, full_duration,
+                    spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
+                    spect_window or DEFAULT_SPECT_WINDOW_SEC,
+                    spect_step or DEFAULT_SPECT_STEP_SEC,
+                    spect_c or DEFAULT_SPECT_C_PARAM,
+                    theta_band[0], theta_band[1],
+                    DEFAULT_THETA_INTERP_STEP_HZ,
+                    DEFAULT_THETA_SMOOTH_WIDTH,
+                )
+                np.savez(
+                    Path(handoff_dir) / "theta.npz",
+                    times=theta_times, peak_hz=theta_peak,
+                )
+
     # Write handoff JSON
     handoff = {
         "behavior_path": behavior_path,
@@ -524,6 +551,9 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         "has_neural": has_neural,
         "show_spectrogram": show_spect and has_neural,
         "spectrogram_channel_name": spect_ch_name if (show_spect and has_neural) else None,
+        "show_theta_peak": show_theta_peak and has_neural,
+        "theta_band": list(theta_band),
+        "theta_peak_color": theta_peak_color or "black",
         "t_start": t_center,
         "window_duration": duration,
     }
