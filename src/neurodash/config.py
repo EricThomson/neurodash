@@ -24,12 +24,15 @@ DEFAULT_VIEW_DURATION = 30.0
 # full stack still fits the viewport without scrolling.
 SESSION_PANEL_UNIT_PX = 150
 
-# Spectrogram defaults (opt-in)
+# Spectrogram defaults (opt-in). Theta rides on these, so they set the theta computation
+# too. window 1.5 s, c 10, and max 40 Hz come from the analysis notebook (2.0 s over-smooths
+# real fluctuations); step 0.1 s is a finer hop than the notebook's 0.25 (finer time
+# sampling, suited to the higher-rate behavior). STEP is the hop (time resolution = 1/step).
 DEFAULT_SHOW_SPECTROGRAM = False
-DEFAULT_SPECT_MAX_FREQ = 90.0
-DEFAULT_SPECT_WINDOW_SEC = 2.0
+DEFAULT_SPECT_MAX_FREQ = 40.0
+DEFAULT_SPECT_WINDOW_SEC = 1.5
 DEFAULT_SPECT_STEP_SEC = 0.1
-DEFAULT_SPECT_C_PARAM = 20
+DEFAULT_SPECT_C_PARAM = 10
 
 # Channel Viewer
 CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
@@ -44,7 +47,8 @@ DEFAULT_SHOW_THETA_POWER = False
 DEFAULT_THETA_LOW_HZ = 4.0          # theta band lower edge
 DEFAULT_THETA_HIGH_HZ = 12.0        # theta band upper edge
 DEFAULT_THETA_INTERP_STEP_HZ = 0.1  # fine grid for sub-bin peak-frequency precision
-DEFAULT_THETA_SMOOTH_WIDTH = 9      # Hann window (bins) smoothing the output series
+DEFAULT_THETA_SMOOTH_WIDTH = 5      # Hann window (bins) smoothing the output series
+                                    # (=5 per the notebook; ports 1:1 now the hop is 0.25s)
 THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogram in time
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots

@@ -6,9 +6,9 @@ with no UI or I/O dependencies.
 """
 
 import numpy as np
+import anaties as ana
 from lspopt import spectrogram_lspopt
 from scipy.interpolate import interp1d
-from scipy.ndimage import convolve1d
 
 
 def compute_multitaper_spectrogram(
@@ -58,32 +58,23 @@ def db_to_linear(power_db):
     return np.power(10.0, np.asarray(power_db, dtype=float) / 10.0)
 
 
-def _hann(width):
-    """Normalized (sum-to-1) Hann window of odd length >= 1. Even widths round up."""
-    width = int(width)
-    if width < 2:
-        return np.array([1.0])
-    if width % 2 == 0:
-        width += 1
-    w = np.hanning(width + 2)[1:-1]  # drop the zero endpoints
-    return w / w.sum()
-
-
 def smooth_series(series, width):
-    """Hann-smooth a 1-D series (edges reflected). Returns unchanged if width < 2."""
+    """Hann-smooth a 1-D series via anaties (`ana.smooth` — zero-phase filtfilt, the
+    same call the analysis notebooks use). ``width`` is the filter width in bins;
+    returned unchanged for width < 3 (a Hann of width 2 is degenerate)."""
     series = np.asarray(series, dtype=float)
-    w = _hann(width)
-    if w.size < 2:
+    if int(width) < 3:
         return series
-    return convolve1d(series, w, mode="reflect")
+    return ana.smooth(series, window_type="hann", filter_width=int(width), plot_on=False)[0]
 
 
 def smooth_time(power, width):
-    """Hann-smooth a (n_freqs, n_times) array along time (axis 1), edges reflected."""
-    w = _hann(width)
-    if w.size < 2:
+    """Hann-smooth a (n_freqs, n_times) array along time via anaties' ``smooth_rows``
+    (smooths each frequency's time series). ``width`` is the filter width in bins."""
+    power = np.asarray(power, dtype=float)
+    if int(width) < 3:
         return power
-    return convolve1d(np.asarray(power, dtype=float), w, axis=1, mode="reflect")
+    return ana.smooth_rows(power, window_type="hann", filter_width=int(width))
 
 
 def theta_band_power(freqs, power, theta_band=(4.0, 12.0)):

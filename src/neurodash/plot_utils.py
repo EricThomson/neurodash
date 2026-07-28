@@ -78,13 +78,13 @@ def plot_session_view(session, controls):
             panels.append(("theta_power", _plot_theta_power))
 
     if session.has_behavior:
-        if controls.get("show_velocity", True):
-            panels.append(("velocity", _plot_velocity))
+        # Mobility and velocity share one panel — they measure the same thing two
+        # ways (r^2 ~ 0.86) but each carries unique variance, so they're worth
+        # reading against each other rather than in separate rows.
+        if controls.get("show_motion", True):
+            panels.append(("motion", _plot_motion))
         if controls.get("show_position", True):
             panels.append(("position", _plot_position))
-        # Mobility is a continuous % channel; skip gracefully if the file lacks it.
-        if controls.get("show_mobility", True) and "Mobility" in session.behavior_data.columns:
-            panels.append(("mobility", _plot_mobility))
 
     if not panels:
         return None, 0
@@ -104,6 +104,9 @@ def plot_session_view(session, controls):
         rows=n, cols=1,
         row_heights=row_heights,
         vertical_spacing=0.05,
+        # The motion panel overlays two different units (% and cm/s), so it needs
+        # a right-hand axis; every other panel is single-axis.
+        specs=[[{"secondary_y": label == "motion"}] for label, _ in panels],
     )
 
     for i, (label, plot_fn) in enumerate(panels, start=1):
@@ -177,6 +180,18 @@ def mobility_ylim(m):
     return (0.0, float(np.nanpercentile(m, 99.9)))
 
 
+def _axis_refs(fig, row):
+    """Return this row's ("x"/"x3", "y"/"y5") axis references for annotations.
+
+    Ask the figure rather than assuming ref number == row number: a panel with a
+    secondary y-axis (the motion panel) consumes two y-axis slots, so every panel
+    below it is offset.
+    """
+    subplot = fig.get_subplot(row, 1)
+    return (subplot.xaxis.plotly_name.replace("axis", ""),
+            subplot.yaxis.plotly_name.replace("axis", ""))
+
+
 def normalize_lfp_traces(ys):
     """Normalize LFP traces for stacked waterfall display.
 
@@ -213,10 +228,10 @@ def _plot_lfp(fig, row, session, controls):
     full_duration = sig_info["duration_sec"]
 
     if not raw_channel_indices:
-        axis_suffix = "" if row == 1 else str(row)
+        xref, yref = _axis_refs(fig, row)
         fig.add_annotation(
             text="No channels selected.",
-            xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+            xref=f"{xref} domain", yref=f"{yref} domain",
             x=0.5, y=0.5, showarrow=False,
         )
         fig.update_yaxes(title_text="LFP", row=row, col=1)
@@ -231,7 +246,7 @@ def _plot_lfp(fig, row, session, controls):
         ys.append((ch, y))
 
     normalized, y_range = normalize_lfp_traces([y for _, y in ys])
-    axis_suffix = "" if row == 1 else str(row)
+    xref, yref = _axis_refs(fig, row)
     for i, (ch, y_norm) in enumerate(zip([ch for ch, _ in ys], normalized)):
         offset = i * 5.0
         fig.add_trace(
@@ -245,7 +260,7 @@ def _plot_lfp(fig, row, session, controls):
         )
         fig.add_annotation(
             x=0.01, y=float(offset),
-            xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix}",
+            xref=f"{xref} domain", yref=yref,
             text=channel_labels[ch],
             showarrow=False, xanchor="left", yanchor="bottom",
             font=dict(size=11, color="white"),
@@ -273,19 +288,19 @@ def _plot_spectrogram(fig, row, session, controls):
             ch,
             0,
             full_duration,
-            controls.get("spect_max_freq", 90.0),
-            controls.get("spect_window_sec", 2.0),
-            controls.get("spect_step_sec", 0.1),
-            controls.get("spect_c_param", 20),
+            controls.get("spect_max_freq", config.DEFAULT_SPECT_MAX_FREQ),
+            controls.get("spect_window_sec", config.DEFAULT_SPECT_WINDOW_SEC),
+            controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC),
+            controls.get("spect_c_param", config.DEFAULT_SPECT_C_PARAM),
         )
     except Exception as e:
         print(f"ERROR in _plot_spectrogram: {e}")
         import traceback
         traceback.print_exc()
-        axis_suffix = "" if row == 1 else str(row)
+        xref, yref = _axis_refs(fig, row)
         fig.add_annotation(
             text=f"Spectrogram error: {e}",
-            xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+            xref=f"{xref} domain", yref=f"{yref} domain",
             x=0.5, y=0.5, showarrow=False,
         )
         return
@@ -296,7 +311,9 @@ def _plot_spectrogram(fig, row, session, controls):
             colorscale="Inferno",
             showscale=False,
             name=f"Spectrogram ({channel_labels[ch]})",
-            hovertemplate="%{y:.1f} Hz, %{z:.1f} dB<extra></extra>",
+            hoverinfo="skip",  # raw-heatmap hover (arbitrary dB) is noise; when theta
+                               # peak is shown, its overlay line carries the useful
+                               # hover — and, being a line trace, shows time on the axis.
         ),
         row=row, col=1,
     )
@@ -321,7 +338,7 @@ def _plot_spectrogram(fig, row, session, controls):
 
     fig.update_yaxes(
         title_text=f"Freq (Hz) — {channel_labels[ch]}",
-        range=[0, controls.get("spect_max_freq", 90.0)], fixedrange=True,
+        range=[0, controls.get("spect_max_freq", config.DEFAULT_SPECT_MAX_FREQ)], fixedrange=True,
         row=row, col=1,
     )
 
@@ -352,10 +369,10 @@ def _theta_channels(session, controls):
 
 
 def _theta_error(fig, row, message):
-    axis_suffix = "" if row == 1 else str(row)
+    xref, yref = _axis_refs(fig, row)
     fig.add_annotation(
         text=message,
-        xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+        xref=f"{xref} domain", yref=f"{yref} domain",
         x=0.5, y=0.5, showarrow=False,
     )
 
@@ -431,7 +448,7 @@ def _theta_power_ylim(power):
 
 def _plot_position(fig, row, session, controls):
     t, x, y = extract_position(session.behavior_data, point="center")
-    axis_suffix = "" if row == 1 else str(row)
+    xref, yref = _axis_refs(fig, row)
 
     fig.add_trace(
         go.Scatter(x=t, y=x, mode="lines", line=dict(color="steelblue", width=0.8),
@@ -445,14 +462,14 @@ def _plot_position(fig, row, session, controls):
     )
     fig.add_annotation(
         x=0.01, y=0.95, text="X",
-        xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+        xref=f"{xref} domain", yref=f"{yref} domain",
         showarrow=False, xanchor="left", yanchor="top",
         font=dict(size=11, color="steelblue"),
         bgcolor="rgba(255,255,255,0.7)", borderpad=2,
     )
     fig.add_annotation(
         x=0.01, y=0.70, text="Y",
-        xref=f"x{axis_suffix} domain", yref=f"y{axis_suffix} domain",
+        xref=f"{xref} domain", yref=f"{yref} domain",
         showarrow=False, xanchor="left", yanchor="top",
         font=dict(size=11, color="coral"),
         bgcolor="rgba(255,255,255,0.7)", borderpad=2,
@@ -460,10 +477,40 @@ def _plot_position(fig, row, session, controls):
     fig.update_yaxes(title_text="Position (cm)", fixedrange=True, row=row, col=1)
 
 
-def _plot_velocity(fig, row, session, controls):
+def _plot_motion(fig, row, session, controls):
+    """Mobility (%) and velocity (cm/s) overlaid on one panel, dual y-axis.
+
+    Mobility is the primary (left) axis — it's the one users read first; velocity
+    rides the right axis so both keep their real units. Axis titles are coloured
+    to match their traces, since the figure has no legend. Falls back to
+    velocity-only when the EthoVision file has no Mobility column.
+    """
     t = session.behavior_data["Recording time"].to_numpy(dtype=float)
     v = session.behavior_data["Velocity"].to_numpy(dtype=float)
+    has_mobility = "Mobility" in session.behavior_data.columns
 
+    if has_mobility:
+        m = session.behavior_data["Mobility"].to_numpy(dtype=float)
+        fig.add_trace(
+            go.Scatter(
+                x=t, y=m,
+                mode="lines",
+                name="Mobility",
+                line=dict(color="darkorange", width=0.8),
+                hovertemplate="Mobility: %{y:.1f}%<extra></extra>",
+            ),
+            row=row, col=1, secondary_y=False,
+        )
+        fig.update_yaxes(
+            title_text="Mobility (%)", title_font=dict(color="darkorange"),
+            tickfont=dict(color="darkorange"),
+            range=list(mobility_ylim(m)), fixedrange=True,
+            row=row, col=1, secondary_y=False,
+        )
+
+    # Velocity goes on the right axis when mobility owns the left; on the left
+    # (as the only trace) when the file has no mobility.
+    on_right = has_mobility
     fig.add_trace(
         go.Scatter(
             x=t, y=v,
@@ -472,33 +519,13 @@ def _plot_velocity(fig, row, session, controls):
             line=dict(color="seagreen", width=0.8),
             hovertemplate="Velocity: %{y:.1f} cm/s<extra></extra>",
         ),
-        row=row, col=1,
+        row=row, col=1, secondary_y=on_right,
     )
     fig.update_yaxes(
-        title_text="Velocity (cm/s)",
-        range=list(velocity_ylim(v)), fixedrange=True,
-        row=row, col=1,
-    )
-
-
-def _plot_mobility(fig, row, session, controls):
-    t = session.behavior_data["Recording time"].to_numpy(dtype=float)
-    m = session.behavior_data["Mobility"].to_numpy(dtype=float)
-
-    fig.add_trace(
-        go.Scatter(
-            x=t, y=m,
-            mode="lines",
-            name="Mobility",
-            line=dict(color="darkorange", width=0.8),
-            hovertemplate="Mobility: %{y:.1f}%<extra></extra>",
-        ),
-        row=row, col=1,
-    )
-    fig.update_yaxes(
-        title_text="Mobility (%)",
-        range=list(mobility_ylim(m)), fixedrange=True,
-        row=row, col=1,
+        title_text="Velocity (cm/s)", title_font=dict(color="seagreen"),
+        tickfont=dict(color="seagreen"),
+        range=list(velocity_ylim(v)), fixedrange=True, showgrid=False,
+        row=row, col=1, secondary_y=on_right,
     )
 
 

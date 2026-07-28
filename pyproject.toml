@@ -34,6 +34,8 @@ dependencies = [
   "pyqtgraph",
   # single-instance launcher (map port -> PID for `neurodash --restart`)
   "psutil",
+  # analysis utilities (currently used for smoothing) 
+  "anaties",
 ]
 
 [project.urls]

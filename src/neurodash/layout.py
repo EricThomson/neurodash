@@ -137,7 +137,9 @@ def _right_sidebar():
             html.Div("Controls", style=_SECTION_HEADER),
 
             # --- View controls ---
-            html.Label("View duration (s)", style={"fontSize": "0.8em"}),
+            html.Label("View duration (s)",
+                       title="Width of the visible time window.",
+                       style={"fontSize": "0.8em"}),
             dcc.Input(
                 id="input-window-duration",
                 type="number",
@@ -146,7 +148,9 @@ def _right_sidebar():
                 debounce=True,
                 style={"width": "100%", "marginBottom": "6px"},
             ),
-            html.Label("View time (s)", style={"fontSize": "0.8em"}),
+            html.Label("View time (s)",
+                       title="Start time of the visible window.",
+                       style={"fontSize": "0.8em"}),
             dcc.Input(
                 id="input-jump-to-time",
                 type="number",
@@ -161,7 +165,11 @@ def _right_sidebar():
             # shows all channels). Seeded from the starred exemplar. ---
             html.Div(
                 [
-                    html.Label("Analysis channel", style={"fontSize": "0.8em"}),
+                    html.Label("Spectrogram Channel",
+                               title="Channel for displaying spectrogram. Used for "
+                                     "calculating theta peak, power, etc. Defaults to "
+                                     "exemplar unless other channel is selected.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Dropdown(
                         id="dropdown-spectrogram-channel",
                         placeholder="Channel...",
@@ -178,7 +186,11 @@ def _right_sidebar():
             html.Div(
                 [
                     html.Div("Spectrogram", style=_SECTION_HEADER),
-                    html.Label("Window (s)", style={"fontSize": "0.8em"}),
+                    html.Label("Window (s)",
+                               title="Time window each spectrogram is computed over. Longer "
+                                     "window will smooth across time, but give better "
+                                     "frequency-domain resolution (1/window).",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-spect-window",
                         type="number",
@@ -187,7 +199,10 @@ def _right_sidebar():
                         debounce=True,
                         style={"width": "100%", "marginBottom": "6px"},
                     ),
-                    html.Label("Step (s)", style={"fontSize": "0.8em"}),
+                    html.Label("Step (s)",
+                               title="Time resolution of spectrogram: the step size between "
+                                     "spectrogram calculations.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-spect-step",
                         type="number",
@@ -196,7 +211,11 @@ def _right_sidebar():
                         debounce=True,
                         style={"width": "100%", "marginBottom": "6px"},
                     ),
-                    html.Label("C parameter", style={"fontSize": "0.8em"}),
+                    html.Label("C parameter",
+                               title="How much the spectrum is averaged to reduce noise: "
+                                     "higher C = cleaner but coarser, lower C = sharper "
+                                     "but noisier.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-spect-c-param",
                         type="number",
@@ -205,7 +224,9 @@ def _right_sidebar():
                         debounce=True,
                         style={"width": "100%", "marginBottom": "6px"},
                     ),
-                    html.Label("Max freq (Hz)", style={"fontSize": "0.8em"}),
+                    html.Label("Max freq (Hz)",
+                               title="Highest frequency shown on the spectrogram.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-spect-max-freq",
                         type="number",
@@ -223,7 +244,10 @@ def _right_sidebar():
             html.Div(
                 [
                     html.Div("Theta", style=_SECTION_HEADER),
-                    html.Label("Low (Hz)", style={"fontSize": "0.8em"}),
+                    html.Label("Low (Hz)",
+                               title="Theta band lower edge. Peak theta = argmax frequency in "
+                                     "Low–High; theta power = mean power across it.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-theta-low",
                         type="number",
@@ -232,7 +256,10 @@ def _right_sidebar():
                         debounce=True,
                         style={"width": "100%", "marginBottom": "6px"},
                     ),
-                    html.Label("High (Hz)", style={"fontSize": "0.8em"}),
+                    html.Label("High (Hz)",
+                               title="Theta band upper edge. Peak theta = argmax frequency in "
+                                     "Low–High; theta power = mean power across it.",
+                               style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-theta-high",
                         type="number",
