@@ -775,12 +775,16 @@ def _write_export(df, out_path, comment=""):
     return out
 
 
-def _comment_lines(text, label="comment"):
-    """Split a free-text comment into header lines, labelling the first line."""
-    lines = []
-    for i, ln in enumerate((text or "").strip().splitlines()):
-        lines.append(f"{label}: {ln}" if i == 0 else ln)
-    return lines
+# Fixed preamble of the neural CSV header, in order, ending with the count of the
+# per-channel rows that follow it. Copied from the PLX format's own layout (see
+# neo.rawio.plexonrawio): a fixed-size GlobalHeader carrying NumDSPChannels /
+# NumEventChannels / NumSlowChannels, then that many per-channel records. The header
+# is variable in height but self-describing — a reader skips
+# len(_CHANNEL_HEADER_FIELDS) + n_channel_rows instead of needing a fixed size.
+_CHANNEL_HEADER_FIELDS = (
+    "animal", "recorded", "source", "sampling_rate_hz", "duration_s",
+    "comment", "exemplar", "n_channel_rows",
+)
 
 
 def _channel_header(session, channel_data, included):
@@ -792,28 +796,30 @@ def _channel_header(session, channel_data, included):
     sig_info = session.analog_signal_summaries[0]
     rec = session.rec_datetime
 
-    lines = [f"animal: {channel_data.get('animal') or 'Unknown'}"]
+    v = {k: "" for k in _CHANNEL_HEADER_FIELDS}
+    v["animal"] = channel_data.get("animal") or "Unknown"
     if rec is not None:
-        lines.append(f"recorded: {rec.strftime('%Y-%m-%d %H:%M')}")
+        v["recorded"] = rec.strftime("%Y-%m-%d %H:%M")
     if session.pl2_path:
-        lines.append(f"source: {Path(session.pl2_path).name}")
-    lines.append(f"sampling_rate_hz: {sig_info['sampling_rate_hz']:.0f}")
-    lines.append(f"duration_s: {sig_info['duration_sec']:.1f}")
-
-    lines += _comment_lines(channel_data.get("comment"))
+        v["source"] = Path(session.pl2_path).name
+    v["sampling_rate_hz"] = f"{sig_info['sampling_rate_hz']:.0f}"
+    v["duration_s"] = f"{sig_info['duration_sec']:.1f}"
+    v["comment"] = _flatten(channel_data.get("comment"))
 
     exemplar = channel_data.get("exemplar_channel_index")
     if exemplar is not None:
         label = channels.get(str(exemplar), {}).get("label", str(exemplar))
-        suffix = "" if exemplar in included else " (not exported)"
-        lines.append(f"exemplar: {label}{suffix}")
+        v["exemplar"] = label + ("" if exemplar in included else " (not exported)")
+
+    v["n_channel_rows"] = str(len(included))
+    lines = [f"{k}: {v[k]}" for k in _CHANNEL_HEADER_FIELDS]
 
     for idx in included:
         entry = channels.get(str(idx), {})
         label = entry.get("label", str(idx))
         quality = entry.get("quality") or "unrated"
-        note = (entry.get("comment") or "").strip()
-        line = f"{label} [{quality}]"
+        note = _flatten(entry.get("comment"))
+        line = f"channel: {label} [{quality}]"
         if note:
             line += f": {note}"
         lines.append(line)
@@ -821,60 +827,77 @@ def _channel_header(session, channel_data, included):
     return "\n".join(lines)
 
 
+# Fields written in the analysis CSV header, in order. EVERY key is always emitted,
+# blank when it doesn't apply, so the header is the same number of rows in every file
+# neurodash writes — concatenating across animals can then skip a fixed row count.
+# Adding a field here changes that count: append rather than insert, and expect older
+# exports to be one row shorter.
+_ANALYSIS_HEADER_FIELDS = (
+    "animal", "neural_source", "spectrogram_channel", "theta_band_hz", "time_base",
+    "behavior_source", "start_time", "experiment", "trial", "arena",
+    "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
+)
+
+
+def _flatten(text):
+    """Squash a free-text comment onto one line so it stays one header row."""
+    return " / ".join(ln.strip() for ln in (text or "").strip().splitlines() if ln.strip())
+
+
 def _analysis_header(session, animal, behavior_path, channel_data,
                      channel_index, band, window, step, c):
-    """Header block for the analysis CSV.
+    """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
     Everything needed to reproduce the table and to know what its `time` column
     means: provenance for both source files, the theta parameters, and — because
     the behavioral columns were resampled — the grid they were put on and the
     window they were averaged over.
+
+    Fields that don't apply are written blank rather than omitted, so every export
+    has an identical header height (see _ANALYSIS_HEADER_FIELDS).
     """
-    lines = [f"animal: {animal or 'Unknown'}"]
+    v = {k: "" for k in _ANALYSIS_HEADER_FIELDS}
+    v["animal"] = animal or "Unknown"
 
     if session.has_neural:
-        sig_info = session.analog_signal_summaries[0]
-        label = sig_info["channel_labels"][channel_index]
+        label = session.analog_signal_summaries[0]["channel_labels"][channel_index]
         if session.pl2_path:
-            lines.append(f"neural_source: {Path(session.pl2_path).name}")
-        lines.append(f"analysis_channel: {label}")
-        lines.append(f"theta_band_hz: {band[0]}-{band[1]}")
-        lines.append(f"time_base: spectral bins, step {step}s (window {window}s, c={c}) on {label}")
+            v["neural_source"] = Path(session.pl2_path).name
+        v["spectrogram_channel"] = label
+        v["theta_band_hz"] = f"{band[0]}-{band[1]}"
+        v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c}) on {label}"
+        # Only the spectrogram channel's own note belongs here — every neural column in
+        # this table comes from that one channel. The general neural comment belongs to
+        # the Channel Viewer export (_channel_header), which spans all saved channels.
+        entry = (channel_data or {}).get("channels", {}).get(str(channel_index), {})
+        v["spectrogram_channel_comment"] = _flatten(entry.get("comment"))
     else:
-        lines.append("time_base: behavior sample times (no neural data loaded)")
+        v["time_base"] = "behavior sample times (no neural data loaded)"
 
     if session.has_behavior and behavior_path:
         info = get_display_metadata(session.behavior_metadata)
         start = info.get("start_time")
-        start_str = start.strftime("%Y-%m-%d %H:%M") if hasattr(start, "strftime") else (start or None)
-        lines.append(f"behavior_source: {Path(behavior_path).name}")
-        if start_str:
-            lines.append(f"start_time: {start_str}")
-        for key, field in (("experiment", "experiment"), ("trial", "trial_name"),
-                           ("arena", "arena_name")):
-            if info.get(field):
-                lines.append(f"{key}: {info[field]}")
+        v["behavior_source"] = Path(behavior_path).name
+        v["start_time"] = (start.strftime("%Y-%m-%d %H:%M")
+                           if hasattr(start, "strftime") else (start or ""))
+        v["experiment"] = info.get("experiment") or ""
+        v["trial"] = info.get("trial_name") or ""
+        v["arena"] = info.get("arena_name") or ""
         if session.has_neural:
             t_behav = session.behavior_data["Recording time"].to_numpy(dtype=float)
             rate = 1.0 / np.median(np.diff(t_behav)) if len(t_behav) > 1 else float("nan")
             # The bin is closed at both ends, so it catches one more sample than
             # step*rate would suggest.
             n_per_bin = int(step * rate) + 1
-            lines.append(
-                f"behavior columns: mean over the {step}s bin centred on each time "
-                f"({n_per_bin} samples at {rate:.1f} Hz)"
-            )
-            lines.append(
-                f"note: grid starts at window/2 = {window / 2:g}s; bins past the end of "
-                "the behavior recording are NaN"
-            )
+            v["behavior_binning"] = (f"mean over the {step}s bin centred on each time "
+                                     f"({n_per_bin} samples at {rate:.1f} Hz)")
+            v["grid_note"] = (f"grid starts at window/2 = {window / 2:g}s; bins past the "
+                              "end of the behavior recording are NaN")
 
-    if channel_data:
-        lines += _comment_lines(channel_data.get("comment"), label="neural_comment")
     if behavior_path:
-        lines += _comment_lines(load_behavior_notes(behavior_path).get("comment"),
-                                label="behavior_comment")
-    return "\n".join(lines)
+        v["behavior_comment"] = _flatten(load_behavior_notes(behavior_path).get("comment"))
+
+    return "\n".join(f"{k}: {v[k]}" for k in _ANALYSIS_HEADER_FIELDS)
 
 
 @callback(
