@@ -293,11 +293,6 @@ def _right_sidebar():
                         debounce=True,
                         style={"width": "100%", "marginBottom": "8px"},
                     ),
-                    html.Button("Download theta CSV",
-                                id="btn-download-theta-csv", n_clicks=0),
-                    html.Div(id="div-theta-export-status",
-                             style={"marginTop": "6px", "color": "#999",
-                                    "fontSize": "0.85em"}),
                 ],
                 id="div-theta-controls",
                 style={"display": "none"},
@@ -338,12 +333,17 @@ def make_layout():
                     # Session Viewer pane — always mounted (display toggled by tab)
                     html.Div(
                         [
-                            # Behavioral-data export + a free-text comment on the recording
+                            # Analysis export (theta + behavior on one time base)
+                            # + a free-text comment on the recording
                             html.Div(
                                 [
-                                    html.Button("Download to CSV",
-                                                id="btn-download-behavior-csv", n_clicks=0),
-                                    html.Span(id="div-behavior-export-status",
+                                    html.Button(
+                                        "Export analysis CSV",
+                                        id="btn-download-analysis-csv", n_clicks=0,
+                                        title="Theta peak/power and behavior on one time base "
+                                              "(the spectrogram bins), written to a CSV you choose.",
+                                    ),
+                                    html.Span(id="div-analysis-export-status",
                                               style={"marginLeft": "10px", "color": "#999",
                                                      "fontSize": "0.85em"}),
                                     dcc.Textarea(

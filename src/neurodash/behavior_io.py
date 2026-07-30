@@ -217,45 +217,6 @@ def estimate_position_pixels(x, y, video_width, video_height,
 
 
 # ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
-
-def build_behavior_table(data, animal):
-    """Curated JMP-ready per-sample behavioral table for CSV export.
-
-    Columns: animal, time, x, y, velocity, mobility — one row per behavioral
-    sample, sorted by time. `animal` (from the pl2 filename) is the same for
-    every row, so combining across animals later is a plain concat. `mobility`
-    is the EthoVision 'Mobility' column (%), or NaN if the file lacks it.
-
-    Parameters
-    ----------
-    data : pd.DataFrame — output of load_behavior_file.
-    animal : str — animal ID.
-
-    Returns
-    -------
-    pd.DataFrame
-    """
-    t, x, y = extract_position(data, point="center")
-    velocity = data["Velocity"].to_numpy(dtype=float)
-    if "Mobility" in data.columns:
-        mobility = data["Mobility"].to_numpy(dtype=float)
-    else:
-        mobility = np.full(len(t), np.nan)
-
-    table = pd.DataFrame({
-        "animal": animal,
-        "time": t,
-        "x": x,
-        "y": y,
-        "velocity": velocity,
-        "mobility": mobility,
-    })
-    return table.sort_values("time", kind="stable").reset_index(drop=True)
-
-
-# ---------------------------------------------------------------------------
 # Behavior notes — a free-text comment on the whole recording, persisted as a
 # JSON sidecar (<stem>.behavior.json) next to the Excel file, like the channel
 # sidecar. Reloads on the next open.

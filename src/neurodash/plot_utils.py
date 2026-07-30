@@ -12,6 +12,7 @@ from neurodash import config
 from neurodash.neural_io import get_analog_signal, extract_time_window
 from neurodash.behavior_io import extract_position
 from neurodash.session import compute_spectrogram, compute_theta_channels
+from neurodash.timebase import window_average
 
 
 def plot_behavior_view(session):
@@ -78,9 +79,8 @@ def plot_session_view(session, controls):
             panels.append(("theta_power", _plot_theta_power))
 
     if session.has_behavior:
-        # Mobility and velocity share one panel — they measure the same thing two
-        # ways (r^2 ~ 0.86) but each carries unique variance, so they're worth
-        # reading against each other rather than in separate rows.
+        # Mobility + velocity on one panel, each shown raw and subsampled onto the
+        # export grid — the panel is the live check on what the export's binning costs.
         if controls.get("show_motion", True):
             panels.append(("motion", _plot_motion))
         if controls.get("show_position", True):
@@ -104,8 +104,8 @@ def plot_session_view(session, controls):
         rows=n, cols=1,
         row_heights=row_heights,
         vertical_spacing=0.05,
-        # The motion panel overlays two different units (% and cm/s), so it needs
-        # a right-hand axis; every other panel is single-axis.
+        # The motion panel carries two different units (% and cm/s), so it needs a
+        # right-hand axis; every other panel is single-axis.
         specs=[[{"secondary_y": label == "motion"}] for label, _ in panels],
     )
 
@@ -478,29 +478,65 @@ def _plot_position(fig, row, session, controls):
 
 
 def _plot_motion(fig, row, session, controls):
-    """Mobility (%) and velocity (cm/s) overlaid on one panel, dual y-axis.
+    """Mobility (%) and velocity (cm/s), each raw and subsampled onto the export grid.
 
-    Mobility is the primary (left) axis — it's the one users read first; velocity
-    rides the right axis so both keep their real units. Axis titles are coloured
-    to match their traces, since the figure has no legend. Falls back to
-    velocity-only when the EthoVision file has no Mobility column.
+    Four traces on a dual axis: mobility owns the left (orange), velocity the right
+    (green); within each colour the faint line is raw at the EthoVision rate and the
+    solid one is what `_analysis.csv` contains (same grid, same 0.1 s bins). So the
+    panel is the live check on what the export's subsampling costs.
+
+    Only the subsampled traces carry hover — four values changing at once under the
+    crosshair is unreadable, and the raw traces are there to be seen, not read off.
+
+    Dots track the theta marker controls, since the subsampled traces share the theta
+    channels' time bins. They need the spectral grid, so without neural data only the
+    raw traces are drawn (and they take the hover instead).
     """
     t = session.behavior_data["Recording time"].to_numpy(dtype=float)
-    v = session.behavior_data["Velocity"].to_numpy(dtype=float)
     has_mobility = "Mobility" in session.behavior_data.columns
 
+    times = None
+    if session.has_neural:
+        try:
+            times, _peak, _power = _theta_channels(session, controls)
+        except Exception as e:
+            print(f"ERROR getting spectral grid for motion panel: {e}")
+    step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)
+    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
+
+    def add_channel(values, colour, faint, label, unit, fmt, on_right):
+        """Raw trace (no hover) plus its subsampled counterpart (which carries it)."""
+        has_binned = times is not None
+        fig.add_trace(
+            go.Scattergl(
+                x=t, y=values, mode="lines",
+                name=f"{label} (raw)",
+                line=dict(color=faint, width=0.7),
+                # Hover belongs to the subsampled trace; when there isn't one, raw takes it.
+                hoverinfo="skip" if has_binned else None,
+                hovertemplate=None if has_binned
+                else f"{label}: %{{y:{fmt}}}{unit}<extra></extra>",
+            ),
+            row=row, col=1, secondary_y=on_right,
+        )
+        if has_binned:
+            fig.add_trace(
+                go.Scattergl(
+                    x=times, y=window_average(t, values, times, step), mode=mode,
+                    name=label,
+                    line=dict(color=colour, width=1.0),
+                    marker=dict(color=colour, size=size),
+                    hovertemplate=f"{label}: %{{y:{fmt}}}{unit}<extra></extra>",
+                ),
+                row=row, col=1, secondary_y=on_right,
+            )
+
+    # Mobility on the left axis — skipped gracefully if the file lacks the column,
+    # in which case velocity takes the left axis as the only trace.
     if has_mobility:
         m = session.behavior_data["Mobility"].to_numpy(dtype=float)
-        fig.add_trace(
-            go.Scatter(
-                x=t, y=m,
-                mode="lines",
-                name="Mobility",
-                line=dict(color="darkorange", width=0.8),
-                hovertemplate="Mobility: %{y:.1f}%<extra></extra>",
-            ),
-            row=row, col=1, secondary_y=False,
-        )
+        add_channel(m, "darkorange", "rgba(255,140,0,0.40)", "Mobility", "%", ".1f", False)
         fig.update_yaxes(
             title_text="Mobility (%)", title_font=dict(color="darkorange"),
             tickfont=dict(color="darkorange"),
@@ -508,24 +544,13 @@ def _plot_motion(fig, row, session, controls):
             row=row, col=1, secondary_y=False,
         )
 
-    # Velocity goes on the right axis when mobility owns the left; on the left
-    # (as the only trace) when the file has no mobility.
-    on_right = has_mobility
-    fig.add_trace(
-        go.Scatter(
-            x=t, y=v,
-            mode="lines",
-            name="Velocity",
-            line=dict(color="seagreen", width=0.8),
-            hovertemplate="Velocity: %{y:.1f} cm/s<extra></extra>",
-        ),
-        row=row, col=1, secondary_y=on_right,
-    )
+    v = session.behavior_data["Velocity"].to_numpy(dtype=float)
+    add_channel(v, "seagreen", "rgba(46,139,87,0.40)", "Velocity", " cm/s", ".1f", has_mobility)
     fig.update_yaxes(
         title_text="Velocity (cm/s)", title_font=dict(color="seagreen"),
         tickfont=dict(color="seagreen"),
         range=list(velocity_ylim(v)), fixedrange=True, showgrid=False,
-        row=row, col=1, secondary_y=on_right,
+        row=row, col=1, secondary_y=has_mobility,
     )
 
 

@@ -103,6 +103,9 @@ class NeurodashViewer(QMainWindow):
             self.t_behav = behavior["Recording time"].to_numpy(dtype=float)
             self.x_cm = behavior["X center"].to_numpy(dtype=float)
             self.y_cm = behavior["Y center"].to_numpy(dtype=float)
+            # Velocity, raw at the EthoVision rate. The viewer deliberately shows only
+            # the raw trace — the raw-vs-subsampled comparison is a QC question that
+            # lives in the Dash Session Viewer, not something you ask while scrubbing video.
             self.velocity = behavior["Velocity"].to_numpy(dtype=float)
         else:
             recording_delay_s = 0.0

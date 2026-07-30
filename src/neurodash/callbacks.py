@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 from dash import (
     Input, Output, State, ALL, callback, clientside_callback, ctx, dcc, html, no_update,
 )
@@ -22,10 +21,11 @@ from neurodash.config import (
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
 from neurodash.app_state import last_browse_dir, remember_browse_dir
-from neurodash.file_picker import pick_file
+from neurodash.file_picker import pick_file, pick_save_path
 from neurodash.behavior_io import (
-    get_display_metadata, build_behavior_table, load_behavior_notes, save_behavior_notes,
+    get_display_metadata, load_behavior_notes, save_behavior_notes,
 )
+from neurodash.export import build_analysis_table
 from neurodash.neural_io import get_analog_signal, extract_time_window, build_neural_table
 from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_channel_figure
 from neurodash.session import (
@@ -750,14 +750,24 @@ def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comm
 _NO_ANIMAL_HINT = "No animal ID (check the recording filename) — can't export."
 
 
-def _write_export(df, filename, comment=""):
-    """Write a CSV into the export dir (creating it) and return the full path.
+def _ask_export_path(default_name):
+    """Ask the user where to save an export; "" if they cancel.
+
+    Opens in EXPORT_DIR, which is now the suggested home for exports rather than
+    the only place they can go.
+    """
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    return pick_save_path("Save CSV", "CSV (*.csv)", str(EXPORT_DIR), default_name)
+
+
+def _write_export(df, out_path, comment=""):
+    """Write a CSV to `out_path` and return it.
 
     An optional free-text comment is written as `#`-prefixed header lines above
     the data (skippable on import, e.g. JMP's comment-character setting).
     """
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    out = EXPORT_DIR / filename
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as f:
         for line in (comment or "").splitlines():
             f.write(f"# {line}\n")
@@ -811,39 +821,59 @@ def _channel_header(session, channel_data, included):
     return "\n".join(lines)
 
 
-def _behavior_header(behavior_path, session, animal):
-    """Assemble the behavior-CSV header block: animal, session provenance from the
-    EthoVision metadata, and the general behavioral comment.
-    """
-    info = get_display_metadata(session.behavior_metadata)
-    start = info.get("start_time")
-    start_str = start.strftime("%Y-%m-%d %H:%M") if hasattr(start, "strftime") else (start or None)
+def _analysis_header(session, animal, behavior_path, channel_data,
+                     channel_index, band, window, step, c):
+    """Header block for the analysis CSV.
 
+    Everything needed to reproduce the table and to know what its `time` column
+    means: provenance for both source files, the theta parameters, and — because
+    the behavioral columns were resampled — the grid they were put on and the
+    window they were averaged over.
+    """
     lines = [f"animal: {animal or 'Unknown'}"]
-    if start_str:
-        lines.append(f"start_time: {start_str}")
-    for key, field in (("experiment", "experiment"), ("trial", "trial_name"),
-                       ("arena", "arena_name")):
-        if info.get(field):
-            lines.append(f"{key}: {info[field]}")
-    lines.append(f"source: {Path(behavior_path).name}")
-    lines += _comment_lines(load_behavior_notes(behavior_path).get("comment"))
-    return "\n".join(lines)
 
+    if session.has_neural:
+        sig_info = session.analog_signal_summaries[0]
+        label = sig_info["channel_labels"][channel_index]
+        if session.pl2_path:
+            lines.append(f"neural_source: {Path(session.pl2_path).name}")
+        lines.append(f"analysis_channel: {label}")
+        lines.append(f"theta_band_hz: {band[0]}-{band[1]}")
+        lines.append(f"time_base: spectral bins, step {step}s (window {window}s, c={c}) on {label}")
+    else:
+        lines.append("time_base: behavior sample times (no neural data loaded)")
 
-def _theta_header(session, channel_data, channel_index, band, window, step, c):
-    """Header block for the theta CSV: animal, provenance, analysis channel, and
-    the parameters the peak/power were computed with (so the export is reproducible).
-    """
-    sig_info = session.analog_signal_summaries[0]
-    label = sig_info["channel_labels"][channel_index]
-    lines = [f"animal: {channel_data.get('animal') or 'Unknown'}"]
-    if session.pl2_path:
-        lines.append(f"source: {Path(session.pl2_path).name}")
-    lines.append(f"analysis_channel: {label}")
-    lines.append(f"theta_band_hz: {band[0]}-{band[1]}")
-    lines.append(f"spectrogram: window={window}s step={step}s c={c}")
-    lines += _comment_lines(channel_data.get("comment"))
+    if session.has_behavior and behavior_path:
+        info = get_display_metadata(session.behavior_metadata)
+        start = info.get("start_time")
+        start_str = start.strftime("%Y-%m-%d %H:%M") if hasattr(start, "strftime") else (start or None)
+        lines.append(f"behavior_source: {Path(behavior_path).name}")
+        if start_str:
+            lines.append(f"start_time: {start_str}")
+        for key, field in (("experiment", "experiment"), ("trial", "trial_name"),
+                           ("arena", "arena_name")):
+            if info.get(field):
+                lines.append(f"{key}: {info[field]}")
+        if session.has_neural:
+            t_behav = session.behavior_data["Recording time"].to_numpy(dtype=float)
+            rate = 1.0 / np.median(np.diff(t_behav)) if len(t_behav) > 1 else float("nan")
+            # The bin is closed at both ends, so it catches one more sample than
+            # step*rate would suggest.
+            n_per_bin = int(step * rate) + 1
+            lines.append(
+                f"behavior columns: mean over the {step}s bin centred on each time "
+                f"({n_per_bin} samples at {rate:.1f} Hz)"
+            )
+            lines.append(
+                f"note: grid starts at window/2 = {window / 2:g}s; bins past the end of "
+                "the behavior recording are NaN"
+            )
+
+    if channel_data:
+        lines += _comment_lines(channel_data.get("comment"), label="neural_comment")
+    if behavior_path:
+        lines += _comment_lines(load_behavior_notes(behavior_path).get("comment"),
+                                label="behavior_comment")
     return "\n".join(lines)
 
 
@@ -867,40 +897,20 @@ def export_channel_csv(n_clicks, neural_path):
     )
     if not included:
         return "No channels selected — check the Save box on the channels to export."
+    out_path = _ask_export_path(f"{Path(neural_path).stem}_neural.csv")
+    if not out_path:
+        return ""
     df = build_neural_table(session, included, channel_data["animal"])
-    out = _write_export(df, f"{Path(neural_path).stem}_neural.csv",
+    out = _write_export(df, out_path,
                         comment=_channel_header(session, channel_data, included))
     return f"Saved to {out}"
 
 
 @callback(
-    Output("div-behavior-export-status", "children"),
-    Input("btn-download-behavior-csv", "n_clicks"),
+    Output("div-analysis-export-status", "children"),
+    Input("btn-download-analysis-csv", "n_clicks"),
+    State("store-neural-path", "data"),
     State("store-behavior-path", "data"),
-    State("store-neural-path", "data"),
-    prevent_initial_call=True,
-)
-def export_behavior_csv(n_clicks, behavior_path, neural_path):
-    if not behavior_path:
-        return no_update
-    # animal is derived from the paired neural recording's sidecar.
-    animal = ""
-    if neural_path:
-        nsession = load_session_from_paths(neural_path, "")
-        animal = load_channels(nsession.pl2_path, nsession).get("animal", "")
-    if not animal:
-        return _NO_ANIMAL_HINT
-    session = load_session_from_paths("", behavior_path)
-    df = build_behavior_table(session.behavior_data, animal)
-    out = _write_export(df, f"{Path(behavior_path).stem}_behavior.csv",
-                        comment=_behavior_header(behavior_path, session, animal))
-    return f"Saved to {out}"
-
-
-@callback(
-    Output("div-theta-export-status", "children"),
-    Input("btn-download-theta-csv", "n_clicks"),
-    State("store-neural-path", "data"),
     State("dropdown-spectrogram-channel", "value"),
     State("input-theta-low", "value"),
     State("input-theta-high", "value"),
@@ -910,36 +920,48 @@ def export_behavior_csv(n_clicks, behavior_path, neural_path):
     State("input-spect-max-freq", "value"),
     prevent_initial_call=True,
 )
-def export_theta_csv(n_clicks, neural_path, channel, theta_low, theta_high,
-                     spect_window, spect_step, spect_c, spect_max_freq):
-    """Write the theta channels (animal, time, peak_hz, power_db) for the analysis
-    channel to CSV — the same series shown in the Session Viewer.
+def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
+                        theta_low, theta_high,
+                        spect_window, spect_step, spect_c, spect_max_freq):
+    """Write the one analysis table — theta channels plus behavior, on a single
+    time base — to a CSV of the user's choosing.
+
+    The spectrogram bins are the grid whenever neural data is loaded; behavior is
+    averaged onto them. Nothing is written in two time bases.
     """
-    if not neural_path:
+    if not neural_path and not behavior_path:
         return no_update
-    session = load_session_from_paths(neural_path, "")
-    channel_data = load_channels(session.pl2_path, session)
-    animal = channel_data.get("animal")
+
+    session = load_session_from_paths(neural_path or "", behavior_path or "")
+
+    # animal always comes from the neural sidecar — behavior files don't carry it.
+    channel_data = {}
+    animal = ""
+    if neural_path:
+        channel_data = load_channels(session.pl2_path, session)
+        animal = channel_data.get("animal", "")
     if not animal:
         return _NO_ANIMAL_HINT
 
     ch = channel if channel is not None else 0
-    sig_info = session.analog_signal_summaries[0]
     band = (theta_low or DEFAULT_THETA_LOW_HZ, theta_high or DEFAULT_THETA_HIGH_HZ)
     window = spect_window or DEFAULT_SPECT_WINDOW_SEC
     step = spect_step or DEFAULT_SPECT_STEP_SEC
     c = spect_c or DEFAULT_SPECT_C_PARAM
-    times, peak, power = compute_theta_channels(
-        str(session.pl2_path), 0, ch, sig_info["duration_sec"],
-        spect_max_freq or DEFAULT_SPECT_MAX_FREQ, window, step, c,
-        band[0], band[1], DEFAULT_THETA_INTERP_STEP_HZ, DEFAULT_THETA_SMOOTH_WIDTH,
+    spect_params = {"window": window, "step": step, "c": c,
+                    "max_freq": spect_max_freq or DEFAULT_SPECT_MAX_FREQ}
+
+    stem = Path(neural_path or behavior_path).stem
+    out_path = _ask_export_path(f"{stem}_analysis.csv")
+    if not out_path:
+        return ""
+
+    df = build_analysis_table(session, animal, ch, band, spect_params)
+    out = _write_export(
+        df, out_path,
+        comment=_analysis_header(session, animal, behavior_path, channel_data,
+                                 ch, band, window, step, c),
     )
-    df = pd.DataFrame({
-        "animal": animal, "time": times,
-        "theta_peak_hz": peak, "theta_power_db": power,
-    })
-    out = _write_export(df, f"{Path(neural_path).stem}_theta.csv",
-                        comment=_theta_header(session, channel_data, ch, band, window, step, c))
     return f"Saved to {out}"
 
 

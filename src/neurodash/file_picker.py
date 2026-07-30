@@ -13,8 +13,9 @@ Why this exists:
     On Windows, SetForegroundWindow forces the dialog in front of the browser.
 
 Usage from Dash callback:
-    from neurodash.file_picker import pick_file
+    from neurodash.file_picker import pick_file, pick_save_path
     path = pick_file("Select .pl2 file", "Plexon (*.pl2)")
+    out = pick_save_path("Export analysis CSV", "CSV (*.csv)", d, "FC33-4_analysis.csv")
 """
 
 import subprocess
@@ -37,8 +38,33 @@ def pick_file(title, filter_str, start_dir=""):
     -------
     str — selected file path, or "" if cancelled
     """
+    return _run_dialog("open", title, filter_str, start_dir, "")
+
+
+def pick_save_path(title, filter_str, start_dir="", default_name=""):
+    """Open a native Save-As dialog and return the chosen path.
+
+    Same subprocess trick as pick_file. The dialog is prefilled with
+    `default_name` so the common case is one Enter press, and the caller's
+    `start_dir` is only a starting point — the user can save anywhere.
+
+    Parameters
+    ----------
+    title : str
+    filter_str : str — e.g. "CSV (*.csv)"
+    start_dir : str — directory to open the dialog in
+    default_name : str — filename to prefill
+
+    Returns
+    -------
+    str — chosen file path, or "" if cancelled
+    """
+    return _run_dialog("save", title, filter_str, start_dir, default_name)
+
+
+def _run_dialog(mode, title, filter_str, start_dir, default_name):
     result = subprocess.run(
-        [sys.executable, __file__, title, filter_str, start_dir],
+        [sys.executable, __file__, mode, title, filter_str, start_dir, default_name],
         capture_output=True,
         text=True,
     )
@@ -48,14 +74,25 @@ def pick_file(title, filter_str, start_dir=""):
 if __name__ == "__main__":
     # Called as subprocess — open dialog and print path to stdout
     import sys as _sys
-    title = _sys.argv[1] if len(_sys.argv) > 1 else "Select file"
-    filter_str = _sys.argv[2] if len(_sys.argv) > 2 else ""
-    start_dir = _sys.argv[3] if len(_sys.argv) > 3 else ""
+    def _arg(i, default=""):
+        return _sys.argv[i] if len(_sys.argv) > i else default
+
+    mode = _arg(1, "open")
+    title = _arg(2, "Select file")
+    filter_str = _arg(3)
+    start_dir = _arg(4)
+    default_name = _arg(5)
 
     from PyQt6.QtWidgets import QApplication, QFileDialog
     from PyQt6.QtCore import Qt
     app = QApplication([])
     dialog = QFileDialog(None, title, start_dir, filter_str)
+    if mode == "save":
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setDefaultSuffix("csv")
+        if default_name:
+            dialog.selectFile(default_name)
     dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
     dialog.show()
     # Force window to foreground (Windows only)
