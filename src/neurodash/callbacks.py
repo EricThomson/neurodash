@@ -17,7 +17,7 @@ from neurodash.config import (
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
-    DEFAULT_THETA_ESTIMATOR, DEFAULT_THETA_WINDOW_SEC,
+    DEFAULT_THETA_ESTIMATOR,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
@@ -340,13 +340,12 @@ clientside_callback(
     Input("toggle-theta-peak-markers", "value"),
     Input("input-theta-dot-size", "value"),
     Input("radio-theta-estimator", "value"),
-    Input("input-theta-window", "value"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   spect_channel, spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
-                  peak_dot_size, theta_estimator, theta_window, view_range):
+                  peak_dot_size, theta_estimator, view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
 
@@ -370,7 +369,6 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_markers": "dots" in (peak_markers or []),
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
         "theta_estimator": theta_estimator or DEFAULT_THETA_ESTIMATOR,
-        "theta_window_sec": theta_window,
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
@@ -431,7 +429,6 @@ _last_handoff_dir = None
     State("input-theta-high", "value"),
     State("radio-theta-peak-color", "value"),
     State("radio-theta-estimator", "value"),
-    State("input-theta-window", "value"),
     State("store-view-range", "data"),
     prevent_initial_call=True,
 )
@@ -439,7 +436,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                   selected_channels, spect_toggle, spect_channel,
                   spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, theta_peak_color,
-                  theta_estimator, theta_window,
+                  theta_estimator,
                   view_range):
     global _viewer_process, _last_handoff_dir
 
@@ -538,7 +535,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
             # Theta peak: computed here (same cache the figure uses, so this is
             # usually free) and handed over as a plain array — the viewer only draws it.
             if show_theta_peak:
-                theta_times, theta_peak, _theta_power, _h = compute_theta_channels(
+                theta_times, theta_peak, _theta_power = compute_theta_channels(
                     neural_path, 0, spect_ch, full_duration,
                     spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
                     spect_window or DEFAULT_SPECT_WINDOW_SEC,
@@ -547,7 +544,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                     theta_band[0], theta_band[1],
                     DEFAULT_THETA_INTERP_STEP_HZ,
                     DEFAULT_THETA_SMOOTH_WIDTH,
-                    theta_estimator, theta_window or None,
+                    theta_estimator,
                 )
                 np.savez(
                     Path(handoff_dir) / "theta.npz",
@@ -844,7 +841,7 @@ def _channel_header(session, channel_data, included):
 # exports to be one row shorter.
 _ANALYSIS_HEADER_FIELDS = (
     "animal", "neural_source", "spectrogram_channel", "theta_band_hz",
-    "theta_estimator", "theta_peak_window_s", "time_base",
+    "theta_estimator", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
 )
@@ -856,8 +853,7 @@ def _flatten(text):
 
 
 def _analysis_header(session, animal, behavior_path, channel_data,
-                     channel_index, band, window, step, c,
-                     estimator=None, theta_window=None):
+                     channel_index, band, window, step, c, estimator=None):
     """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
     Everything needed to reproduce the table and to know what its `time` column
@@ -878,8 +874,6 @@ def _analysis_header(session, animal, behavior_path, channel_data,
         v["spectrogram_channel"] = label
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
         v["theta_estimator"] = estimator or ""
-        v["theta_peak_window_s"] = ("" if theta_window in (None, "")
-                                    else f"{float(theta_window):g}")
         v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c}) on {label}"
         # Only the spectrogram channel's own note belongs here — every neural column in
         # this table comes from that one channel. The general neural comment belongs to
@@ -957,13 +951,12 @@ def export_channel_csv(n_clicks, neural_path):
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
     State("radio-theta-estimator", "value"),
-    State("input-theta-window", "value"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
                         theta_low, theta_high,
                         spect_window, spect_step, spect_c, spect_max_freq,
-                        theta_estimator, theta_window):
+                        theta_estimator):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -998,12 +991,11 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
         return ""
 
     df = build_analysis_table(session, animal, ch, band, spect_params,
-                              estimator=theta_estimator, theta_window=theta_window)
+                              estimator=theta_estimator)
     out = _write_export(
         df, out_path,
         comment=_analysis_header(session, animal, behavior_path, channel_data,
-                                 ch, band, window, step, c,
-                                 theta_estimator, theta_window),
+                                 ch, band, window, step, c, theta_estimator),
     )
     return f"Saved to {out}"
 

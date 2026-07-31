@@ -53,14 +53,27 @@ THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogr
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
 
-# Theta peak estimator. "argmax" is the original (largest power in band); "crest"
-# removes the 1/f background first and takes the tallest local maximum, which stops
-# delta's flank pinning the estimate to the 4 Hz edge. See
-# sandbox/docs/delta_contamination.md. DEFAULT_THETA_WINDOW_SEC lets the peak be
-# estimated on a wider window than the spectrogram is drawn with (None = share it);
-# a wider window narrows the smoothing kernel that causes the contamination.
-DEFAULT_THETA_ESTIMATOR = "crest"
-DEFAULT_THETA_WINDOW_SEC = 2.5
+# Theta peak estimator. Three options, see sandbox/docs/delta_contamination.md:
+#   "argmax"   original — largest power in the band. Delta's flank pins it to the
+#              4 Hz edge on 2-15% of bins depending on channel.
+#   "bandpass" filter the LFP to the band +/- a margin, then argmax. DEFAULT.
+#              Simplest, measured marginally best, and trivial to describe in a
+#              methods section. Destructive: whatever the filter removes is gone
+#              before any estimator sees it, so the margin must keep the edges
+#              outside the real theta range (FC33-4 AI18 has genuine 4.1 Hz theta).
+# A third "crest" estimator (whiten out 1/f, take the strongest local maximum) was
+# built, measured and removed — same answers to within 0.03-0.15 Hz, far harder to
+# explain. Kept for the record in sandbox/docs/delta_contamination.md.
+DEFAULT_THETA_ESTIMATOR = "bandpass"
+
+# "bandpass" estimator: bandpass the LFP just outside the theta band, then plain
+# argmax. Measured slightly better on pinning than the alternatives, but it is
+# DESTRUCTIVE — filter edges inside the real theta range silently mangle the signal
+# and nothing downstream can detect it. FC33-4 AI18 has genuine theta at 4.1 Hz, so
+# a 4.0 Hz edge would clip it; hence the margin, which keeps the filter outside
+# whatever band is set rather than at a fixed frequency.
+DEFAULT_THETA_BANDPASS_MARGIN_HZ = 0.5
+DEFAULT_THETA_BANDPASS_ORDER = 8
 
 # ---------------------------------------------------------------------------
 # TEMPORARY dev convenience: autoload these files on startup so you don't have

@@ -80,14 +80,25 @@ def compute_spectrogram(
     window_duration,
     step_duration,
     c_parameter,
+    bandpass_low=None,
+    bandpass_high=None,
+    bandpass_order=8,
 ):
     """Compute and cache spectrogram by pl2_path + parameters.
+
+    ``bandpass_low``/``bandpass_high`` optionally filter the LFP *before* the
+    spectrogram — used by the "bandpass" theta estimator. They are part of the cache
+    key, so filtered and unfiltered spectrograms coexist rather than evicting each
+    other when you flip estimators.
 
     Keys on pl2_path_str for hashability (lru_cache requirement).
     """
     block, _ = _cached_load_block(pl2_path_str)
     sig = get_analog_signal(block, analog_signal_index)
     t, y, sr = extract_time_window(sig, channel_index, start_time_sec, duration_sec)
+    if bandpass_low is not None and bandpass_high is not None:
+        y = spectral_utils.bandpass_lfp(y, sr, bandpass_low, bandpass_high,
+                                        order=bandpass_order)
     freqs, times, power_db = compute_multitaper_spectrogram(
         y,
         sampling_rate=sr,
@@ -114,12 +125,10 @@ def compute_theta_channels(
     interp_step,
     smooth_width,
     estimator="argmax",
-    theta_window_duration=None,
 ):
     """Peak-theta-frequency and theta-band-power time series for one channel.
 
-    Returns ``(times, theta_peak_hz, theta_power_db, peak_height_db)``.
-    ``peak_height_db`` is NaN for the argmax estimator, which has no notion of it.
+    Returns ``(times, theta_peak_hz, theta_power_db)``.
 
     Two estimators:
 
@@ -128,22 +137,18 @@ def compute_theta_channels(
                 slopes up through the band it pins to the 4 Hz edge and reports a
                 peak that isn't there (2-15% of bins depending on channel).
 
-    ``crest``   remove the 1/f background, then take the tallest local maximum.
-                A crest can't be manufactured by a neighbouring hillside, so the
-                pinning disappears without blanking anything. Also corrects a
-                downhill bias that affects *every* bin, not just contaminated ones.
-                See sandbox/docs/delta_contamination.md.
-
-    ``theta_window_duration`` lets the peak be estimated on a longer window than the
-    one used to *draw* the spectrogram — they are different jobs. A wider window
-    narrows the estimator's smoothing kernel (1.43 Hz at 1.5 s, 0.86 Hz at 2.5 s),
-    which is what stops a 3 Hz delta line depositing power at 4 Hz. None = share the
-    display window.
-
     Keys on pl2_path_str (+ params) for lru_cache hashability, mirroring
     ``compute_spectrogram``.
     """
-    spect_window = theta_window_duration or window_duration
+    # The "bandpass" estimator filters the LFP before the spectrogram, so the
+    # contaminating energy is gone before any peak-finding happens and a plain
+    # argmax suffices. Edges sit a margin OUTSIDE the analysis band, so changing
+    # the band moves the filter with it and they can't be set inconsistently.
+    bp_low = bp_high = None
+    if estimator == "bandpass":
+        margin = config.DEFAULT_THETA_BANDPASS_MARGIN_HZ
+        bp_low, bp_high = theta_low - margin, theta_high + margin
+
     freqs, times, power_db = compute_spectrogram(
         pl2_path_str,
         analog_signal_index,
@@ -151,9 +156,12 @@ def compute_theta_channels(
         0.0,
         duration_sec,
         max_frequency,
-        spect_window,
+        window_duration,
         step_duration,
         c_parameter,
+        bp_low,
+        bp_high,
+        config.DEFAULT_THETA_BANDPASS_ORDER,
     )
     # The spectrogram is stored in dB; peak/power work on linear power. Smooth in
     # time first so the argmax peak doesn't hop between adjacent frequency bins.
@@ -161,20 +169,14 @@ def compute_theta_channels(
     power = spectral_utils.smooth_time(power, config.THETA_SPECT_TIME_SMOOTH_WIDTH)
 
     band = (theta_low, theta_high)
-    if estimator == "crest":
-        whitened = spectral_utils.whiten_spectrum(freqs, power)
-        peak, peak_height = spectral_utils.crest_peak_frequency(
-            freqs, whitened, power, band)
-    else:
-        peak = spectral_utils.theta_peak_frequency(freqs, power, band, interp_step)
-        peak_height = np.full(len(times), np.nan)
+    peak = spectral_utils.theta_peak_frequency(freqs, power, band, interp_step)
 
     band_power = spectral_utils.theta_band_power(freqs, power, band)
     power_db_series = 10.0 * np.log10(band_power + 1e-12)
 
     peak = spectral_utils.smooth_series(peak, smooth_width)
     power_db_series = spectral_utils.smooth_series(power_db_series, smooth_width)
-    return times, peak, power_db_series, peak_height
+    return times, peak, power_db_series
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ def analysis_time_base(session):
 
 
 def build_analysis_table(session, animal, channel_index, band, spect_params,
-                         estimator=None, theta_window=None):
+                         estimator=None):
     """Merged per-time-bin table for CSV export.
 
     Columns: animal, time, theta_peak_hz, theta_power_db, velocity, mobility, x, y
@@ -48,10 +48,9 @@ def build_analysis_table(session, animal, channel_index, band, spect_params,
     channel_index : int — analysis channel the theta channels come from.
     band : (float, float) — theta band low/high in Hz.
     spect_params : dict — window/step/c/max_freq; missing keys fall back to config.
-    estimator : "argmax" | "crest" | None — which theta-peak estimator to export.
+    estimator : "argmax" | "bandpass" | None — which theta-peak estimator to export.
         Passed from the UI so the CSV matches what is on screen; these must not be
         allowed to diverge.
-    theta_window : float | None — peak-estimation window, likewise from the UI.
 
     Returns
     -------
@@ -66,13 +65,12 @@ def build_analysis_table(session, animal, channel_index, band, spect_params,
 
     if session.has_neural:
         sig_info = session.analog_signal_summaries[0]
-        times, peak, power, _height = compute_theta_channels(
+        times, peak, power = compute_theta_channels(
             str(session.pl2_path), 0, channel_index, sig_info["duration_sec"],
             max_freq, window, step, c_param,
             band[0], band[1],
             config.DEFAULT_THETA_INTERP_STEP_HZ, config.DEFAULT_THETA_SMOOTH_WIDTH,
             estimator or config.DEFAULT_THETA_ESTIMATOR,
-            theta_window if theta_window is not None else config.DEFAULT_THETA_WINDOW_SEC,
         )
         columns["theta_peak_hz"] = peak
         columns["theta_power_db"] = power
