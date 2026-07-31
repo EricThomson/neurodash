@@ -113,16 +113,37 @@ def compute_theta_channels(
     theta_high,
     interp_step,
     smooth_width,
+    estimator="argmax",
+    theta_window_duration=None,
 ):
     """Peak-theta-frequency and theta-band-power time series for one channel.
 
-    Both are derived from the same cached spectrogram the Session Viewer uses, so
-    turning theta on for a channel whose spectrogram is already shown adds only
-    the cheap band reduction on top. Returns (times, theta_peak_hz, theta_power_db).
+    Returns ``(times, theta_peak_hz, theta_power_db, peak_height_db)``.
+    ``peak_height_db`` is NaN for the argmax estimator, which has no notion of it.
+
+    Two estimators:
+
+    ``argmax``  the original — largest power in the band. Fast, but an argmax over
+                a bounded interval must return something, so when delta's flank
+                slopes up through the band it pins to the 4 Hz edge and reports a
+                peak that isn't there (2-15% of bins depending on channel).
+
+    ``crest``   remove the 1/f background, then take the tallest local maximum.
+                A crest can't be manufactured by a neighbouring hillside, so the
+                pinning disappears without blanking anything. Also corrects a
+                downhill bias that affects *every* bin, not just contaminated ones.
+                See sandbox/docs/delta_contamination.md.
+
+    ``theta_window_duration`` lets the peak be estimated on a longer window than the
+    one used to *draw* the spectrogram — they are different jobs. A wider window
+    narrows the estimator's smoothing kernel (1.43 Hz at 1.5 s, 0.86 Hz at 2.5 s),
+    which is what stops a 3 Hz delta line depositing power at 4 Hz. None = share the
+    display window.
 
     Keys on pl2_path_str (+ params) for lru_cache hashability, mirroring
     ``compute_spectrogram``.
     """
+    spect_window = theta_window_duration or window_duration
     freqs, times, power_db = compute_spectrogram(
         pl2_path_str,
         analog_signal_index,
@@ -130,7 +151,7 @@ def compute_theta_channels(
         0.0,
         duration_sec,
         max_frequency,
-        window_duration,
+        spect_window,
         step_duration,
         c_parameter,
     )
@@ -140,13 +161,20 @@ def compute_theta_channels(
     power = spectral_utils.smooth_time(power, config.THETA_SPECT_TIME_SMOOTH_WIDTH)
 
     band = (theta_low, theta_high)
-    peak = spectral_utils.theta_peak_frequency(freqs, power, band, interp_step)
+    if estimator == "crest":
+        whitened = spectral_utils.whiten_spectrum(freqs, power)
+        peak, peak_height = spectral_utils.crest_peak_frequency(
+            freqs, whitened, power, band)
+    else:
+        peak = spectral_utils.theta_peak_frequency(freqs, power, band, interp_step)
+        peak_height = np.full(len(times), np.nan)
+
     band_power = spectral_utils.theta_band_power(freqs, power, band)
     power_db_series = 10.0 * np.log10(band_power + 1e-12)
 
     peak = spectral_utils.smooth_series(peak, smooth_width)
     power_db_series = spectral_utils.smooth_series(power_db_series, smooth_width)
-    return times, peak, power_db_series
+    return times, peak, power_db_series, peak_height
 
 
 # ---------------------------------------------------------------------------

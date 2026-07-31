@@ -53,6 +53,15 @@ THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogr
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
 
+# Theta peak estimator. "argmax" is the original (largest power in band); "crest"
+# removes the 1/f background first and takes the tallest local maximum, which stops
+# delta's flank pinning the estimate to the 4 Hz edge. See
+# sandbox/docs/delta_contamination.md. DEFAULT_THETA_WINDOW_SEC lets the peak be
+# estimated on a wider window than the spectrogram is drawn with (None = share it);
+# a wider window narrows the smoothing kernel that causes the contamination.
+DEFAULT_THETA_ESTIMATOR = "crest"
+DEFAULT_THETA_WINDOW_SEC = 2.5
+
 # ---------------------------------------------------------------------------
 # TEMPORARY dev convenience: autoload these files on startup so you don't have
 # to browse for them every run. Flip AUTOLOAD_ON_STARTUP to False to disable,

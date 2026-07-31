@@ -61,11 +61,12 @@ def build_analysis_table(session, animal, channel_index, band, spect_params):
 
     if session.has_neural:
         sig_info = session.analog_signal_summaries[0]
-        times, peak, power = compute_theta_channels(
+        times, peak, power, _height = compute_theta_channels(
             str(session.pl2_path), 0, channel_index, sig_info["duration_sec"],
             max_freq, window, step, c_param,
             band[0], band[1],
             config.DEFAULT_THETA_INTERP_STEP_HZ, config.DEFAULT_THETA_SMOOTH_WIDTH,
+            config.DEFAULT_THETA_ESTIMATOR, config.DEFAULT_THETA_WINDOW_SEC,
         )
         columns["theta_peak_hz"] = peak
         columns["theta_power_db"] = power

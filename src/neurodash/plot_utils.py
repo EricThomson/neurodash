@@ -318,11 +318,10 @@ def _plot_spectrogram(fig, row, session, controls):
         row=row, col=1,
     )
 
-    # Overlay theta peak (a frequency) as a black line+dots when requested — it
-    # rides on the spectrogram's own frequency axis, most visible where theta is
-    # strong (matches the marker='.' overlay from the notebook). Very light dashed
-    # guides mark the theta band edges (the window the peak is searched in).
-    if controls.get("show_theta_peak"):
+    # Faint dashed guides at the theta band edges. Shown on their own toggle — they
+    # are useful for reading the spectrogram whether or not the peak overlay is on —
+    # and implied by the peak, since they mark the window it is searched in.
+    if controls.get("show_theta_band") or controls.get("show_theta_peak"):
         low, high = controls.get(
             "theta_band", (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
         for edge in (low, high):
@@ -330,8 +329,13 @@ def _plot_spectrogram(fig, row, session, controls):
                 y=edge, row=row, col=1,
                 line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dash"),
             )
+
+    # Overlay theta peak (a frequency) as a line+dots when requested — it rides on
+    # the spectrogram's own frequency axis, most visible where theta is strong
+    # (matches the marker='.' overlay from the notebook).
+    if controls.get("show_theta_peak"):
         try:
-            t_theta, peak, _power = _theta_channels(session, controls)
+            t_theta, peak, _power, _height = _theta_channels(session, controls)
             fig.add_trace(_theta_peak_trace(t_theta, peak, controls), row=row, col=1)
         except Exception as e:
             print(f"ERROR overlaying theta peak: {e}")
@@ -348,7 +352,7 @@ def _plot_spectrogram(fig, row, session, controls):
 # compute_theta_channels, so the two panels share one computation. ---
 
 def _theta_channels(session, controls):
-    """Fetch (times, peak_hz, power_db) for the analysis channel from cache."""
+    """Fetch (times, peak_hz, power_db, peak_height_db) for the analysis channel."""
     sig_info = session.analog_signal_summaries[0]
     ch = controls.get("spectrogram_channel_index", 0)
     band = controls.get("theta_band",
@@ -365,6 +369,8 @@ def _theta_channels(session, controls):
         band[0], band[1],
         config.DEFAULT_THETA_INTERP_STEP_HZ,
         config.DEFAULT_THETA_SMOOTH_WIDTH,
+        controls.get("theta_estimator", config.DEFAULT_THETA_ESTIMATOR),
+        controls.get("theta_window_sec") or None,
     )
 
 
@@ -398,7 +404,7 @@ def _plot_theta_peak(fig, row, session, controls):
     band = controls.get("theta_band",
                         (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
     try:
-        times, peak, _power = _theta_channels(session, controls)
+        times, peak, _power, _height = _theta_channels(session, controls)
     except Exception as e:
         print(f"ERROR in _plot_theta_peak: {e}")
         _theta_error(fig, row, f"Theta peak error: {e}")
@@ -415,7 +421,7 @@ def _plot_theta_peak(fig, row, session, controls):
 
 def _plot_theta_power(fig, row, session, controls):
     try:
-        times, _peak, power = _theta_channels(session, controls)
+        times, _peak, power, _height = _theta_channels(session, controls)
     except Exception as e:
         print(f"ERROR in _plot_theta_power: {e}")
         _theta_error(fig, row, f"Theta power error: {e}")
@@ -498,7 +504,7 @@ def _plot_motion(fig, row, session, controls):
     times = None
     if session.has_neural:
         try:
-            times, _peak, _power = _theta_channels(session, controls)
+            times, _peak, _power, _height = _theta_channels(session, controls)
         except Exception as e:
             print(f"ERROR getting spectral grid for motion panel: {e}")
     step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)

@@ -14,6 +14,8 @@ from neurodash.config import (
     DEFAULT_THETA_LOW_HZ,
     DEFAULT_THETA_HIGH_HZ,
     DEFAULT_THETA_DOT_SIZE,
+    DEFAULT_THETA_ESTIMATOR,
+    DEFAULT_THETA_WINDOW_SEC,
     LOGO_PATH,
     CHANNEL_QUALITY_OPTIONS,
     CHANNEL_ROW_HEIGHT,
@@ -80,6 +82,7 @@ def _left_sidebar():
                     dcc.Checklist(
                         id="toggle-theta",
                         options=[
+                            {"label": " Show theta band", "value": "band"},
                             {"label": " Show theta peak", "value": "peak"},
                             {"label": " Show theta power", "value": "power"},
                         ],
@@ -265,6 +268,37 @@ def _right_sidebar():
                         type="number",
                         value=DEFAULT_THETA_HIGH_HZ,
                         min=1, step=0.5,
+                        debounce=True,
+                        style={"width": "100%", "marginBottom": "8px"},
+                    ),
+                    # Estimator — argmax pins to the band edge when delta bleeds in;
+                    # crest whitens first and takes the tallest local maximum.
+                    html.Label("Peak estimator",
+                               title="argmax = largest power in the band (original). "
+                                     "crest = remove the 1/f background, then take the "
+                                     "tallest local maximum — stops delta pinning the "
+                                     "estimate to 4 Hz.",
+                               style={"fontSize": "0.8em"}),
+                    dcc.RadioItems(
+                        id="radio-theta-estimator",
+                        options=[{"label": " argmax", "value": "argmax"},
+                                 {"label": " crest", "value": "crest"}],
+                        value=DEFAULT_THETA_ESTIMATOR,
+                        inline=True,
+                        style={"fontSize": "0.85em", "marginBottom": "4px"},
+                    ),
+                    html.Label("Peak window (s)",
+                               title="Window used to ESTIMATE the peak, separate from the "
+                                     "spectrogram's display window. Wider = sharper in "
+                                     "frequency (kernel half-width 1.43 Hz at 1.5 s, "
+                                     "0.86 Hz at 2.5 s) but smoother in time. Blank = "
+                                     "use the spectrogram window.",
+                               style={"fontSize": "0.8em"}),
+                    dcc.Input(
+                        id="input-theta-window",
+                        type="number",
+                        value=DEFAULT_THETA_WINDOW_SEC,
+                        min=0.5, max=8, step=0.5,
                         debounce=True,
                         style={"width": "100%", "marginBottom": "8px"},
                     ),

@@ -17,6 +17,7 @@ from neurodash.config import (
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
+    DEFAULT_THETA_ESTIMATOR, DEFAULT_THETA_WINDOW_SEC,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
@@ -338,12 +339,14 @@ clientside_callback(
     Input("radio-theta-peak-color", "value"),
     Input("toggle-theta-peak-markers", "value"),
     Input("input-theta-dot-size", "value"),
+    Input("radio-theta-estimator", "value"),
+    Input("input-theta-window", "value"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   spect_channel, spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
-                  peak_dot_size, view_range):
+                  peak_dot_size, theta_estimator, theta_window, view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
 
@@ -358,6 +361,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "spect_step_sec": spect_step or DEFAULT_SPECT_STEP_SEC,
         "spect_c_param": spect_c or DEFAULT_SPECT_C_PARAM,
         "spect_max_freq": spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
+        "show_theta_band": "band" in theta_toggle,
         "show_theta_peak": "peak" in theta_toggle,
         "show_theta_power": "power" in theta_toggle,
         "theta_band": (theta_low or DEFAULT_THETA_LOW_HZ,
@@ -365,6 +369,8 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_color": peak_color or "black",
         "theta_peak_markers": "dots" in (peak_markers or []),
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
+        "theta_estimator": theta_estimator or DEFAULT_THETA_ESTIMATOR,
+        "theta_window_sec": theta_window,
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
@@ -424,6 +430,8 @@ _last_handoff_dir = None
     State("input-theta-low", "value"),
     State("input-theta-high", "value"),
     State("radio-theta-peak-color", "value"),
+    State("radio-theta-estimator", "value"),
+    State("input-theta-window", "value"),
     State("store-view-range", "data"),
     prevent_initial_call=True,
 )
@@ -431,6 +439,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                   selected_channels, spect_toggle, spect_channel,
                   spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, theta_peak_color,
+                  theta_estimator, theta_window,
                   view_range):
     global _viewer_process, _last_handoff_dir
 
@@ -529,7 +538,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
             # Theta peak: computed here (same cache the figure uses, so this is
             # usually free) and handed over as a plain array — the viewer only draws it.
             if show_theta_peak:
-                theta_times, theta_peak, _theta_power = compute_theta_channels(
+                theta_times, theta_peak, _theta_power, _h = compute_theta_channels(
                     neural_path, 0, spect_ch, full_duration,
                     spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
                     spect_window or DEFAULT_SPECT_WINDOW_SEC,
@@ -538,6 +547,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                     theta_band[0], theta_band[1],
                     DEFAULT_THETA_INTERP_STEP_HZ,
                     DEFAULT_THETA_SMOOTH_WIDTH,
+                    theta_estimator, theta_window or None,
                 )
                 np.savez(
                     Path(handoff_dir) / "theta.npz",
