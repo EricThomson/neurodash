@@ -53,6 +53,20 @@ THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogr
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
 
+# Theta ratio — (low - high) / (low + high) of mean power in two sub-bands, so
+# positive = slow theta dominates. Bands are fixed/manual here; deriving them from
+# the movement-conditioned peak distribution (KDE) is separate, deferred work.
+# Defaults are James Ward's bands, per the source notebook. They are sub-bands of
+# the theta band, and must stay inside it: under the "bandpass" estimator the whole
+# spectrogram is of LFP filtered to theta band +/- the margin, and a ratio band
+# reaching outside that sits on the filter rolloff. Inside, this is a non-issue —
+# measured power gain is 1.0000 at all four default edges and the ratio off the
+# filtered vs unfiltered spectrogram matches at r = 1.0000 (sandbox/probe_ratio_bandpass.py),
+# so the ratio rides on the same spectrogram peak and power already use.
+DEFAULT_SHOW_THETA_RATIO = False
+DEFAULT_THETA_RATIO_LOW_BAND = (6.1, 7.4)    # James low
+DEFAULT_THETA_RATIO_HIGH_BAND = (7.5, 8.8)   # James high
+
 # Theta peak estimator. Two options, see sandbox/docs/delta_contamination.md:
 #   "argmax"   original — largest power in the band. Delta's flank pins it to the
 #              4 Hz edge on 2-15% of bins depending on channel.

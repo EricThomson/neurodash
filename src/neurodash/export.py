@@ -25,10 +25,11 @@ def analysis_time_base(session):
 
 
 def build_analysis_table(session, animal, channel_index, band, spect_params,
-                         estimator=None):
+                         estimator=None, ratio_low_band=None, ratio_high_band=None):
     """Merged per-time-bin table for CSV export.
 
-    Columns: animal, time, theta_peak_hz, theta_power_db, velocity, mobility, x, y
+    Columns: animal, time, theta_peak_hz, theta_power_db, theta_ratio, velocity,
+    mobility, x, y
     — whichever of those the session has data for. One row per spectral bin.
 
     Behavioral channels are averaged over the **bin spacing** (`step`, 0.1 s → ~3
@@ -51,6 +52,8 @@ def build_analysis_table(session, animal, channel_index, band, spect_params,
     estimator : "argmax" | "bandpass" | None — which theta-peak estimator to export.
         Passed from the UI so the CSV matches what is on screen; these must not be
         allowed to diverge.
+    ratio_low_band, ratio_high_band : (float, float) or None — theta-ratio sub-bands,
+        likewise from the UI. Default to config's James bands.
 
     Returns
     -------
@@ -65,15 +68,18 @@ def build_analysis_table(session, animal, channel_index, band, spect_params,
 
     if session.has_neural:
         sig_info = session.analog_signal_summaries[0]
-        times, peak, power = compute_theta_channels(
+        times, peak, power, ratio = compute_theta_channels(
             str(session.pl2_path), 0, channel_index, sig_info["duration_sec"],
             max_freq, window, step, c_param,
             band[0], band[1],
             config.DEFAULT_THETA_INTERP_STEP_HZ, config.DEFAULT_THETA_SMOOTH_WIDTH,
             estimator or config.DEFAULT_THETA_ESTIMATOR,
+            tuple(ratio_low_band or config.DEFAULT_THETA_RATIO_LOW_BAND),
+            tuple(ratio_high_band or config.DEFAULT_THETA_RATIO_HIGH_BAND),
         )
         columns["theta_peak_hz"] = peak
         columns["theta_power_db"] = power
+        columns["theta_ratio"] = ratio
     else:
         # No spectrogram, so no spectral grid — behavior keeps its own sample times
         # and nothing needs resampling.

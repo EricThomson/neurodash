@@ -77,6 +77,8 @@ def plot_session_view(session, controls):
             panels.append(("theta_peak", _plot_theta_peak))
         if controls.get("show_theta_power"):
             panels.append(("theta_power", _plot_theta_power))
+        if controls.get("show_theta_ratio"):
+            panels.append(("theta_ratio", _plot_theta_ratio))
 
     if session.has_behavior:
         # Mobility + velocity on one panel, each shown raw and subsampled onto the
@@ -330,12 +332,25 @@ def _plot_spectrogram(fig, row, session, controls):
                 line=dict(color="rgba(255,255,255,0.5)", width=1, dash="dash"),
             )
 
+    # Shaded bands for the ratio's low/high sub-bands, so you can see which slices
+    # of the spectrogram the ratio is contrasting (the notebook's rect_highlight).
+    if controls.get("show_theta_ratio"):
+        for band_key, default in (
+            ("theta_ratio_low_band", config.DEFAULT_THETA_RATIO_LOW_BAND),
+            ("theta_ratio_high_band", config.DEFAULT_THETA_RATIO_HIGH_BAND),
+        ):
+            b_low, b_high = controls.get(band_key, default)
+            fig.add_hrect(
+                y0=b_low, y1=b_high, row=row, col=1,
+                fillcolor="rgba(255,255,255,0.18)", line_width=0,
+            )
+
     # Overlay theta peak (a frequency) as a line+dots when requested — it rides on
     # the spectrogram's own frequency axis, most visible where theta is strong
     # (matches the marker='.' overlay from the notebook).
     if controls.get("show_theta_peak"):
         try:
-            t_theta, peak, _power = _theta_channels(session, controls)
+            t_theta, peak, _power, _ratio = _theta_channels(session, controls)
             fig.add_trace(_theta_peak_trace(t_theta, peak, controls), row=row, col=1)
         except Exception as e:
             print(f"ERROR overlaying theta peak: {e}")
@@ -352,7 +367,7 @@ def _plot_spectrogram(fig, row, session, controls):
 # compute_theta_channels, so the two panels share one computation. ---
 
 def _theta_channels(session, controls):
-    """Fetch (times, peak_hz, power_db) for the analysis channel from cache."""
+    """Fetch (times, peak_hz, power_db, ratio) for the analysis channel from cache."""
     sig_info = session.analog_signal_summaries[0]
     ch = controls.get("spectrogram_channel_index", 0)
     band = controls.get("theta_band",
@@ -370,6 +385,8 @@ def _theta_channels(session, controls):
         config.DEFAULT_THETA_INTERP_STEP_HZ,
         config.DEFAULT_THETA_SMOOTH_WIDTH,
         controls.get("theta_estimator", config.DEFAULT_THETA_ESTIMATOR),
+        controls.get("theta_ratio_low_band", config.DEFAULT_THETA_RATIO_LOW_BAND),
+        controls.get("theta_ratio_high_band", config.DEFAULT_THETA_RATIO_HIGH_BAND),
     )
 
 
@@ -403,7 +420,7 @@ def _plot_theta_peak(fig, row, session, controls):
     band = controls.get("theta_band",
                         (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
     try:
-        times, peak, _power = _theta_channels(session, controls)
+        times, peak, _power, _ratio = _theta_channels(session, controls)
     except Exception as e:
         print(f"ERROR in _plot_theta_peak: {e}")
         _theta_error(fig, row, f"Theta peak error: {e}")
@@ -420,7 +437,7 @@ def _plot_theta_peak(fig, row, session, controls):
 
 def _plot_theta_power(fig, row, session, controls):
     try:
-        times, _peak, power = _theta_channels(session, controls)
+        times, _peak, power, _ratio = _theta_channels(session, controls)
     except Exception as e:
         print(f"ERROR in _plot_theta_power: {e}")
         _theta_error(fig, row, f"Theta power error: {e}")
@@ -439,6 +456,40 @@ def _plot_theta_power(fig, row, session, controls):
     fig.update_yaxes(
         title_text="θ Power (dB)",
         range=list(_theta_power_ylim(power)), fixedrange=True,
+        row=row, col=1,
+    )
+
+
+def _plot_theta_ratio(fig, row, session, controls):
+    """(low - high) / (low + high) band-power contrast — positive = slow theta.
+
+    Fixed y-range: the ratio is bounded at +/-1 by construction and read against
+    zero, so an autoscaled axis would make sessions incomparable and hide how far
+    from zero a given wiggle actually is. Clipped to +/-0.75 for resolution — the
+    default James bands sit within ~+/-0.6 on real data.
+    """
+    try:
+        times, _peak, _power, ratio = _theta_channels(session, controls)
+    except Exception as e:
+        print(f"ERROR in _plot_theta_ratio: {e}")
+        _theta_error(fig, row, f"Theta ratio error: {e}")
+        return
+    # Dots + size track the theta-peak controls (same time bins, so they line up).
+    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
+    fig.add_trace(
+        go.Scattergl(x=times, y=ratio, mode=mode,
+                     line=dict(color="darkgreen", width=1.0),
+                     marker=dict(color="darkgreen", size=size),
+                     hovertemplate="θ ratio: %{y:.3f}<extra></extra>"),
+        row=row, col=1,
+    )
+    # Zero line — the ratio's sign is what it is read for (low vs high dominant).
+    fig.add_hline(y=0, row=row, col=1,
+                  line=dict(color="rgba(0,0,0,0.45)", width=1))
+    fig.update_yaxes(
+        title_text="θ Ratio",
+        range=[-0.75, 0.75], fixedrange=True,
         row=row, col=1,
     )
 
@@ -503,7 +554,7 @@ def _plot_motion(fig, row, session, controls):
     times = None
     if session.has_neural:
         try:
-            times, _peak, _power = _theta_channels(session, controls)
+            times, _peak, _power, _ratio = _theta_channels(session, controls)
         except Exception as e:
             print(f"ERROR getting spectral grid for motion panel: {e}")
     step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)

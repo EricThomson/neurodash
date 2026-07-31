@@ -15,6 +15,8 @@ from neurodash.config import (
     DEFAULT_THETA_HIGH_HZ,
     DEFAULT_THETA_DOT_SIZE,
     DEFAULT_THETA_ESTIMATOR,
+    DEFAULT_THETA_RATIO_LOW_BAND,
+    DEFAULT_THETA_RATIO_HIGH_BAND,
     LOGO_PATH,
     CHANNEL_QUALITY_OPTIONS,
     CHANNEL_ROW_HEIGHT,
@@ -84,6 +86,7 @@ def _left_sidebar():
                             {"label": " Show theta band", "value": "band"},
                             {"label": " Show theta peak", "value": "peak"},
                             {"label": " Show theta power", "value": "power"},
+                            {"label": " Show theta ratio", "value": "ratio"},
                         ],
                         value=[],
                         style={"marginTop": "2px"},
@@ -310,6 +313,63 @@ def _right_sidebar():
                         min=1, max=20, step=0.5,
                         debounce=True,
                         style={"width": "100%", "marginBottom": "8px"},
+                    ),
+
+                    # Theta ratio sub-bands. Two narrow slices of the theta band:
+                    # (low - high) / (low + high), so positive = slow theta dominant.
+                    html.Div("Ratio bands", style={**_SECTION_HEADER,
+                                                   "marginTop": "4px"}),
+                    html.Label("Low band (Hz)",
+                               title="Lower sub-band of the theta ratio. Ratio = "
+                                     "(low - high) / (low + high) of mean power, so it "
+                                     "is positive when slow theta dominates. Defaults "
+                                     "are James Ward's bands (6.1-7.4 / 7.5-8.8). Must "
+                                     "stay inside the theta band above.",
+                               style={"fontSize": "0.8em"}),
+                    html.Div(
+                        [
+                            dcc.Input(
+                                id="input-theta-ratio-low-lo",
+                                type="number",
+                                value=DEFAULT_THETA_RATIO_LOW_BAND[0],
+                                min=0.5, step=0.1,
+                                debounce=True,
+                                style={"width": "50%"},
+                            ),
+                            dcc.Input(
+                                id="input-theta-ratio-low-hi",
+                                type="number",
+                                value=DEFAULT_THETA_RATIO_LOW_BAND[1],
+                                min=0.5, step=0.1,
+                                debounce=True,
+                                style={"width": "50%"},
+                            ),
+                        ],
+                        style={"display": "flex", "marginBottom": "6px"},
+                    ),
+                    html.Label("High band (Hz)",
+                               title="Upper sub-band of the theta ratio. See Low band.",
+                               style={"fontSize": "0.8em"}),
+                    html.Div(
+                        [
+                            dcc.Input(
+                                id="input-theta-ratio-high-lo",
+                                type="number",
+                                value=DEFAULT_THETA_RATIO_HIGH_BAND[0],
+                                min=0.5, step=0.1,
+                                debounce=True,
+                                style={"width": "50%"},
+                            ),
+                            dcc.Input(
+                                id="input-theta-ratio-high-hi",
+                                type="number",
+                                value=DEFAULT_THETA_RATIO_HIGH_BAND[1],
+                                min=0.5, step=0.1,
+                                debounce=True,
+                                style={"width": "50%"},
+                            ),
+                        ],
+                        style={"display": "flex", "marginBottom": "8px"},
                     ),
                 ],
                 id="div-theta-controls",

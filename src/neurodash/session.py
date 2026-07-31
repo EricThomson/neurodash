@@ -110,6 +110,22 @@ def compute_spectrogram(
     return freqs, times, power_db
 
 
+def _clamp_band(band, theta_band, label):
+    """Keep a ratio sub-band inside the theta band, warning if it wasn't.
+
+    Two reasons it has to be inside. The interpolated grid only spans the theta
+    band, so a sub-band outside it has no data at all; and under the "bandpass"
+    estimator everything beyond theta band +/- the margin has been filtered away,
+    so a band on the rolloff reports attenuated power as if it were signal.
+    """
+    low = max(float(band[0]), float(theta_band[0]))
+    high = min(float(band[1]), float(theta_band[1]))
+    if (low, high) != (float(band[0]), float(band[1])):
+        print(f"WARNING: theta ratio {label} band {tuple(band)} reaches outside the "
+              f"theta band {tuple(theta_band)}; clamped to ({low}, {high}).")
+    return (low, high) if high > low else (float(theta_band[0]), float(theta_band[1]))
+
+
 @lru_cache(maxsize=8)
 def compute_theta_channels(
     pl2_path_str,
@@ -125,10 +141,12 @@ def compute_theta_channels(
     interp_step,
     smooth_width,
     estimator="argmax",
+    ratio_low_band=config.DEFAULT_THETA_RATIO_LOW_BAND,
+    ratio_high_band=config.DEFAULT_THETA_RATIO_HIGH_BAND,
 ):
-    """Peak-theta-frequency and theta-band-power time series for one channel.
+    """Peak-theta-frequency, theta-band-power and theta-ratio series for one channel.
 
-    Returns ``(times, theta_peak_hz, theta_power_db)``.
+    Returns ``(times, theta_peak_hz, theta_power_db, theta_ratio)``.
 
     Two estimators:
 
@@ -174,9 +192,25 @@ def compute_theta_channels(
     band_power = spectral_utils.theta_band_power(freqs, power, band)
     power_db_series = 10.0 * np.log10(band_power + 1e-12)
 
+    # Ratio takes the *interpolated* band — its sub-bands are narrower than the
+    # spectrogram's frequency resolution, so on the raw grid the edges snap to
+    # bins (see spectral_utils.band_power_ratio). Band power above keeps the raw
+    # grid: an 8 Hz-wide band over ~12 bins has no such problem.
+    fine_freqs, fine_power = spectral_utils.interpolate_band(
+        freqs, power, band, interp_step)
+    if fine_freqs is None:
+        ratio = np.full(len(times), np.nan)
+    else:
+        ratio, _, _ = spectral_utils.band_power_ratio(
+            fine_freqs, fine_power,
+            _clamp_band(ratio_low_band, band, "low"),
+            _clamp_band(ratio_high_band, band, "high"),
+        )
+
     peak = spectral_utils.smooth_series(peak, smooth_width)
     power_db_series = spectral_utils.smooth_series(power_db_series, smooth_width)
-    return times, peak, power_db_series
+    ratio = spectral_utils.smooth_series(ratio, smooth_width)
+    return times, peak, power_db_series, ratio
 
 
 # ---------------------------------------------------------------------------

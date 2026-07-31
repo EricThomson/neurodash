@@ -141,14 +141,43 @@ def bandpass_lfp(signal, sampling_rate, low_hz, high_hz, order=8):
                                order=int(order), plot_on=0)[0]
 
 
+def interpolate_band(freqs, power, band=(4.0, 12.0), interp_step=0.1):
+    """Quadratic-interpolate a spectrogram band onto a fine frequency grid.
+
+    Returns ``(fine_freqs, fine_power)`` — the band resampled at ``interp_step``
+    (Hz), or ``(None, None)`` when the band holds too few bins to interpolate.
+
+    The interpolation is applied as a single precomputed matrix (quadratic-spline
+    interpolation is linear in the data), so all time bins are done in one matmul
+    rather than a per-bin Python loop.
+
+    Both theta peak and theta ratio work off this grid — the peak so it isn't
+    quantized to the spectrogram's coarse bin width, the ratio because its bands
+    are *narrower* than that bin width (see ``band_power_ratio``).
+    """
+    freqs = np.asarray(freqs, dtype=float)
+    power = np.asarray(power, dtype=float)
+    low, high = band
+    mask = (freqs >= low) & (freqs <= high)
+    band_freqs = freqs[mask]
+    band_power = power[mask, :]
+
+    if band_freqs.size < 3:
+        return None, None
+
+    n_steps = max(int((band_freqs[-1] - band_freqs[0]) / interp_step), 1)
+    fine_freqs = np.linspace(band_freqs[0], band_freqs[-1], n_steps)
+    # Interpolation matrix: column j is e_j interpolated onto fine_freqs.
+    basis = np.eye(band_freqs.size)
+    interp_matrix = interp1d(band_freqs, basis, kind="quadratic", axis=0)(fine_freqs)
+    return fine_freqs, interp_matrix @ band_power  # (n_fine, n_times)
+
+
 def theta_peak_frequency(freqs, power, theta_band=(4.0, 12.0), interp_step=0.1):
     """Frequency of maximum power within the theta band, per time bin.
 
-    Quadratic-interpolates each time slice onto an ``interp_step`` (Hz) grid so
-    the peak isn't quantized to the spectrogram's coarse bin width, then takes
-    the argmax frequency. The interpolation is applied as a single precomputed
-    matrix (quadratic-spline interpolation is linear in the data), so all time
-    bins are done in one matmul rather than a per-bin Python loop.
+    Interpolates the band onto an ``interp_step`` (Hz) grid (see
+    ``interpolate_band``), then takes the argmax frequency.
 
     Parameters
     ----------
@@ -170,14 +199,35 @@ def theta_peak_frequency(freqs, power, theta_band=(4.0, 12.0), interp_step=0.1):
 
     if band_freqs.size == 0:
         return np.full(power.shape[1], np.nan)
-    if band_freqs.size < 3:
+
+    fine_freqs, fine_power = interpolate_band(freqs, power, theta_band, interp_step)
+    if fine_freqs is None:
         # too few bins to interpolate — fall back to the raw argmax
         return band_freqs[np.argmax(band_power, axis=0)]
-
-    n_steps = max(int((band_freqs[-1] - band_freqs[0]) / interp_step), 1)
-    fine_freqs = np.linspace(band_freqs[0], band_freqs[-1], n_steps)
-    # Interpolation matrix: column j is e_j interpolated onto fine_freqs.
-    basis = np.eye(band_freqs.size)
-    interp_matrix = interp1d(band_freqs, basis, kind="quadratic", axis=0)(fine_freqs)
-    fine_power = interp_matrix @ band_power  # (n_fine, n_times)
     return fine_freqs[np.argmax(fine_power, axis=0)]
+
+
+def band_power_ratio(freqs, power, low_band, high_band):
+    """Theta ratio — ``(low - high) / (low + high)`` of mean linear band power.
+
+    The sign convention is the notebook's (and the field's): *positive when the
+    low band dominates*, so it tracks the slow-theta state.
+
+    ``freqs``/``power`` must already be on the interpolated fine grid
+    (``interpolate_band``). That is not a stylistic preference: the conventional
+    bands are ~1.3 Hz wide while a 1.5 s window gives ~0.67 Hz resolution, so on
+    the raw grid each band is **two bins** and its edges snap to them — nudging
+    the low edge 6.1 -> 6.6 Hz changes the answer not at all, then jumps at 6.7.
+    On the 0.1 Hz grid each band holds ~13 points and the edges do what they say.
+    (Measured: the two agree at r = 0.99 but disagree on *sign* for 7% of bins,
+    and sign is what the ratio is read for.)
+
+    Returns ``(ratio, mean_low, mean_high)`` — all (n_times,), linear power for
+    the two means. Bins where both bands are empty come back NaN.
+    """
+    mean_low = theta_band_power(freqs, power, low_band)
+    mean_high = theta_band_power(freqs, power, high_band)
+    total = mean_low + mean_high
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = np.where(total > 0, (mean_low - mean_high) / total, np.nan)
+    return ratio, mean_low, mean_high

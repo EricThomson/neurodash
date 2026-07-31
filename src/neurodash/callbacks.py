@@ -18,6 +18,7 @@ from neurodash.config import (
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
     DEFAULT_THETA_ESTIMATOR,
+    DEFAULT_THETA_RATIO_LOW_BAND, DEFAULT_THETA_RATIO_HIGH_BAND,
     AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
@@ -320,6 +321,17 @@ clientside_callback(
 # Figure callback — single combined figure
 # ---------------------------------------------------------------------------
 
+def _ratio_band(low, high, default):
+    """A theta-ratio sub-band from two sidebar inputs, falling back per-edge.
+
+    Tuple (not list) because it is passed to the lru_cached compute_theta_channels
+    and so has to be hashable. A blank or inverted pair falls back to the default
+    rather than producing an empty band that would come back all-NaN.
+    """
+    low = default[0] if low is None else float(low)
+    high = default[1] if high is None else float(high)
+    return (low, high) if high > low else tuple(default)
+
 @callback(
     Output("main-plot", "figure"),
     Output("main-plot", "style"),
@@ -340,12 +352,18 @@ clientside_callback(
     Input("toggle-theta-peak-markers", "value"),
     Input("input-theta-dot-size", "value"),
     Input("radio-theta-estimator", "value"),
+    Input("input-theta-ratio-low-lo", "value"),
+    Input("input-theta-ratio-low-hi", "value"),
+    Input("input-theta-ratio-high-lo", "value"),
+    Input("input-theta-ratio-high-hi", "value"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   spect_channel, spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
-                  peak_dot_size, theta_estimator, view_range):
+                  peak_dot_size, theta_estimator,
+                  ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
+                  view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
 
@@ -363,8 +381,13 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "show_theta_band": "band" in theta_toggle,
         "show_theta_peak": "peak" in theta_toggle,
         "show_theta_power": "power" in theta_toggle,
+        "show_theta_ratio": "ratio" in theta_toggle,
         "theta_band": (theta_low or DEFAULT_THETA_LOW_HZ,
                        theta_high or DEFAULT_THETA_HIGH_HZ),
+        "theta_ratio_low_band": _ratio_band(ratio_low_lo, ratio_low_hi,
+                                            DEFAULT_THETA_RATIO_LOW_BAND),
+        "theta_ratio_high_band": _ratio_band(ratio_high_lo, ratio_high_hi,
+                                             DEFAULT_THETA_RATIO_HIGH_BAND),
         "theta_peak_color": peak_color or "black",
         "theta_peak_markers": "dots" in (peak_markers or []),
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
@@ -535,7 +558,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
             # Theta peak: computed here (same cache the figure uses, so this is
             # usually free) and handed over as a plain array — the viewer only draws it.
             if show_theta_peak:
-                theta_times, theta_peak, _theta_power = compute_theta_channels(
+                theta_times, theta_peak, _theta_power, _theta_ratio = compute_theta_channels(
                     neural_path, 0, spect_ch, full_duration,
                     spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
                     spect_window or DEFAULT_SPECT_WINDOW_SEC,
@@ -844,6 +867,7 @@ _ANALYSIS_HEADER_FIELDS = (
     "theta_estimator", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
+    "theta_ratio_bands_hz",
 )
 
 
@@ -853,7 +877,8 @@ def _flatten(text):
 
 
 def _analysis_header(session, animal, behavior_path, channel_data,
-                     channel_index, band, window, step, c, estimator=None):
+                     channel_index, band, window, step, c, estimator=None,
+                     ratio_low_band=None, ratio_high_band=None):
     """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
     Everything needed to reproduce the table and to know what its `time` column
@@ -874,6 +899,12 @@ def _analysis_header(session, animal, behavior_path, channel_data,
         v["spectrogram_channel"] = label
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
         v["theta_estimator"] = estimator or ""
+        # Both sub-bands on one row — the ratio is a contrast, so a band is
+        # meaningless without its partner.
+        r_low = tuple(ratio_low_band or DEFAULT_THETA_RATIO_LOW_BAND)
+        r_high = tuple(ratio_high_band or DEFAULT_THETA_RATIO_HIGH_BAND)
+        v["theta_ratio_bands_hz"] = (f"low {r_low[0]}-{r_low[1]}, "
+                                     f"high {r_high[0]}-{r_high[1]}")
         v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c}) on {label}"
         # Only the spectrogram channel's own note belongs here — every neural column in
         # this table comes from that one channel. The general neural comment belongs to
@@ -951,12 +982,17 @@ def export_channel_csv(n_clicks, neural_path):
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
     State("radio-theta-estimator", "value"),
+    State("input-theta-ratio-low-lo", "value"),
+    State("input-theta-ratio-low-hi", "value"),
+    State("input-theta-ratio-high-lo", "value"),
+    State("input-theta-ratio-high-hi", "value"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
                         theta_low, theta_high,
                         spect_window, spect_step, spect_c, spect_max_freq,
-                        theta_estimator):
+                        theta_estimator,
+                        ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -990,12 +1026,18 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
     if not out_path:
         return ""
 
+    # Same fallback the figure uses, so the exported ratio matches what is on screen.
+    r_low = _ratio_band(ratio_low_lo, ratio_low_hi, DEFAULT_THETA_RATIO_LOW_BAND)
+    r_high = _ratio_band(ratio_high_lo, ratio_high_hi, DEFAULT_THETA_RATIO_HIGH_BAND)
+
     df = build_analysis_table(session, animal, ch, band, spect_params,
-                              estimator=theta_estimator)
+                              estimator=theta_estimator,
+                              ratio_low_band=r_low, ratio_high_band=r_high)
     out = _write_export(
         df, out_path,
         comment=_analysis_header(session, animal, behavior_path, channel_data,
-                                 ch, band, window, step, c, theta_estimator),
+                                 ch, band, window, step, c, theta_estimator,
+                                 r_low, r_high),
     )
     return f"Saved to {out}"
 
