@@ -53,7 +53,7 @@ THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogr
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
 
-# Theta peak estimator. Three options, see sandbox/docs/delta_contamination.md:
+# Theta peak estimator. Two options, see sandbox/docs/delta_contamination.md:
 #   "argmax"   original — largest power in the band. Delta's flank pins it to the
 #              4 Hz edge on 2-15% of bins depending on channel.
 #   "bandpass" filter the LFP to the band +/- a margin, then argmax. DEFAULT.
