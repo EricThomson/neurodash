@@ -843,7 +843,8 @@ def _channel_header(session, channel_data, included):
 # Adding a field here changes that count: append rather than insert, and expect older
 # exports to be one row shorter.
 _ANALYSIS_HEADER_FIELDS = (
-    "animal", "neural_source", "spectrogram_channel", "theta_band_hz", "time_base",
+    "animal", "neural_source", "spectrogram_channel", "theta_band_hz",
+    "theta_estimator", "theta_peak_window_s", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
 )
@@ -855,7 +856,8 @@ def _flatten(text):
 
 
 def _analysis_header(session, animal, behavior_path, channel_data,
-                     channel_index, band, window, step, c):
+                     channel_index, band, window, step, c,
+                     estimator=None, theta_window=None):
     """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
     Everything needed to reproduce the table and to know what its `time` column
@@ -875,6 +877,9 @@ def _analysis_header(session, animal, behavior_path, channel_data,
             v["neural_source"] = Path(session.pl2_path).name
         v["spectrogram_channel"] = label
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
+        v["theta_estimator"] = estimator or ""
+        v["theta_peak_window_s"] = ("" if theta_window in (None, "")
+                                    else f"{float(theta_window):g}")
         v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c}) on {label}"
         # Only the spectrogram channel's own note belongs here — every neural column in
         # this table comes from that one channel. The general neural comment belongs to
@@ -951,11 +956,14 @@ def export_channel_csv(n_clicks, neural_path):
     State("input-spect-step", "value"),
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
+    State("radio-theta-estimator", "value"),
+    State("input-theta-window", "value"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
                         theta_low, theta_high,
-                        spect_window, spect_step, spect_c, spect_max_freq):
+                        spect_window, spect_step, spect_c, spect_max_freq,
+                        theta_estimator, theta_window):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -989,11 +997,13 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
     if not out_path:
         return ""
 
-    df = build_analysis_table(session, animal, ch, band, spect_params)
+    df = build_analysis_table(session, animal, ch, band, spect_params,
+                              estimator=theta_estimator, theta_window=theta_window)
     out = _write_export(
         df, out_path,
         comment=_analysis_header(session, animal, behavior_path, channel_data,
-                                 ch, band, window, step, c),
+                                 ch, band, window, step, c,
+                                 theta_estimator, theta_window),
     )
     return f"Saved to {out}"
 
