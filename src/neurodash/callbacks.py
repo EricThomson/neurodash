@@ -27,6 +27,7 @@ from neurodash.file_picker import pick_file, pick_save_path, pick_directory
 from neurodash import merge
 from neurodash.behavior_io import (
     get_display_metadata, load_behavior_notes, save_behavior_notes,
+    missing_columns, missing_columns_message,
 )
 from neurodash.export import build_analysis_table
 from neurodash.neural_io import get_analog_signal, extract_time_window, build_neural_table
@@ -100,6 +101,13 @@ def browse_neural(n_clicks):
             [default_channel], options, default_channel)
 
 
+def _load_error(message):
+    """A load failure shown in place of the metadata block — red, and wrapping,
+    since these name specific columns and run long."""
+    return html.Div(message, style={"color": "#b00", "fontSize": "0.85em",
+                                    "whiteSpace": "normal"})
+
+
 @callback(
     Output("store-behavior-path", "data"),
     Output("div-behavior-filename", "children"),
@@ -118,7 +126,19 @@ def browse_behavior(n_clicks):
         return no_update, no_update, no_update
     remember_browse_dir(path)
 
-    session = load_session_from_paths("", path)
+    try:
+        session = load_session_from_paths("", path)
+    except Exception as e:
+        return no_update, Path(path).name, _load_error(f"Could not read this file: {e}")
+
+    # Refuse a file we can't actually plot, and say which columns are missing.
+    # Storing the path anyway would just move the failure into the figure callback,
+    # where a bare KeyError surfaces as nothing happening at all.
+    missing = missing_columns(session.behavior_data)
+    if missing:
+        return (no_update, Path(path).name,
+                _load_error(missing_columns_message(path, missing)))
+
     info = get_display_metadata(session.behavior_metadata)
 
     # Format start_time as date string

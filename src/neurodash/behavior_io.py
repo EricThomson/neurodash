@@ -24,6 +24,37 @@ import numpy as np
 import pandas as pd
 
 
+# Columns neurodash indexes by name and cannot work without. Everything reads by
+# name, so extra columns and any column order are fine — only absence matters.
+# `Mobility` is deliberately NOT here: it is genuinely optional and already guarded
+# at each use, so a file without it loads and simply has no mobility panel.
+#
+# This is the *default* set, not a fixed one. Different session types will need
+# different columns, so both functions below take the requirement set as an
+# argument — a session type can pass its own without changing anything here.
+REQUIRED_COLUMNS = ("Recording time", "X center", "Y center", "Velocity")
+
+
+def missing_columns(data, required=REQUIRED_COLUMNS):
+    """Required columns absent from a loaded behavior table, in declared order.
+
+    Checked at load time so a differing EthoVision export template is reported as
+    a named, fixable problem. Without this the first access raises a bare KeyError
+    deep in a figure callback, which with debug=False surfaces as nothing at all —
+    the plot silently fails to update and the user gets no clue why.
+    """
+    return [c for c in required if c not in data.columns]
+
+
+def missing_columns_message(path, missing, required=REQUIRED_COLUMNS):
+    """Plain-language explanation of which columns a behavior file is missing."""
+    names = ", ".join(f"'{c}'" for c in missing)
+    plural = "columns" if len(missing) > 1 else "column"
+    return (f"{Path(path).name} is missing the {names} {plural}. "
+            f"neurodash needs {', '.join(required)} "
+            f"(plus optional 'Mobility') — check the EthoVision export template.")
+
+
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
