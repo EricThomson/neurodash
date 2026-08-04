@@ -25,10 +25,17 @@ def last_browse_dir():
     return config.DEFAULT_FILE_DIR
 
 
-def remember_browse_dir(file_path):
-    """Persist the folder containing ``file_path`` as the next picker default."""
+def remember_browse_dir(path):
+    """Persist a browsed folder as the next picker default.
+
+    Accepts either a picked *file* (stores its containing folder) or a picked
+    *folder* (stores it as-is) — the merge picker returns a directory, and
+    taking its parent would reopen one level too high.
+    """
     try:
+        path = Path(path)
+        folder = path if path.is_dir() else path.parent
         _LAST_DIR_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _LAST_DIR_FILE.write_text(str(Path(file_path).parent), encoding="utf-8")
+        _LAST_DIR_FILE.write_text(str(folder), encoding="utf-8")
     except OSError:
         pass

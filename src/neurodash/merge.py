@@ -11,10 +11,11 @@ analysis parameters (window/step/c/max_freq, theta band, ratio bands, estimator)
 therefore required to match across files, while the session facts (animal, source,
 channel, times, comments) are expected to differ — that is the point of merging.
 
-Enforcing the first group is also what keeps the merged header small. If parameters
-could vary, every one of them would have to be recorded per animal, and at 20+ animals
-the header becomes a separate metadata file in disguise. Shared parameters mean one
-parameter block plus one provenance line per animal.
+Enforcing the first group is also what keeps the merged header small and, more
+importantly, a FIXED height. If parameters could vary they would have to be recorded
+per animal, and at 40 animals the header becomes a 40-line preamble of a different
+shape on every file. Shared parameters mean one small parameter block that applies to
+every row; per-animal provenance stays in the individual exports next door.
 
 No UI and no Dash here — callbacks own the dialogs and the writing.
 """
@@ -42,12 +43,6 @@ FIELD_LABELS = {
     "theta_ratio_bands_hz": "theta ratio bands",
     "theta_estimator": "theta peak estimator",
 }
-
-# Session facts, echoed into the merged header one line per animal. These are
-# expected to differ — a different analysis channel per animal is normal, since the
-# exemplar differs.
-PROVENANCE_FIELDS = ("neural_source", "spectrogram_channel", "behavior_source",
-                     "start_time", "spectrogram_channel_comment")
 
 ANALYSIS_GLOB = "*_analysis.csv"
 
@@ -209,25 +204,23 @@ def merge_tables(entries):
 
 
 def merged_header(entries):
-    """Provenance block for the merged file.
+    """Parameter block for the merged file — a FIXED number of rows, always.
 
-    One shared parameter section — valid for every row precisely because
-    check_compatible enforced it — then one line per animal for the facts that
-    legitimately differ. Height is self-describing via ``n_animals`` (the same
-    trick the channel export uses), since it grows with the animal count.
+    Deliberately does not carry per-animal provenance. A line per animal would
+    make the header height vary with the animal count, which at 40 animals is a
+    40-line preamble on every file and a different shape each time. The
+    per-animal detail (source recording, analysis channel, comments) already
+    lives in the individual ``_analysis.csv`` exports, which sit alongside this
+    file — ``source_folder`` points at them.
+
+    What is here is exactly what applies to *every* row: the analysis parameters,
+    which check_compatible has already guaranteed are shared. Adding a field means
+    every merged file grows by one row, so append rather than insert.
     """
     first = entries[0]["meta"]
     lines = ["merged: analysis tables combined by neurodash"]
     for field in BLOCKING_FIELDS:
-        value = _compare_value(field, first.get(field, ""))
-        if value:
-            lines.append(f"{field}: {value}")
+        lines.append(f"{field}: {_compare_value(field, first.get(field, ''))}")
     lines.append(f"n_animals: {len(entries)}")
-    for entry in entries:
-        meta = entry["meta"]
-        facts = " | ".join(
-            f"{meta.get(f, '')}" for f in PROVENANCE_FIELDS
-        )
-        lines.append(f"animal {entry['animal']}: {facts}")
-    lines.append("animal fields: " + " | ".join(PROVENANCE_FIELDS))
+    lines.append(f"source_folder: {entries[0]['path'].parent}")
     return "\n".join(lines)

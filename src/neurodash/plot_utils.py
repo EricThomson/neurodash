@@ -75,10 +75,12 @@ def plot_session_view(session, controls):
         # _plot_spectrogram); it only needs its own panel when the heatmap is off.
         if controls.get("show_theta_peak") and not controls.get("show_spectrogram"):
             panels.append(("theta_peak", _plot_theta_peak))
-        if controls.get("show_theta_power"):
-            panels.append(("theta_power", _plot_theta_power))
+        # Ratio above power: it's the derived measure you read against the
+        # spectrogram, so it sits closer to it.
         if controls.get("show_theta_ratio"):
             panels.append(("theta_ratio", _plot_theta_ratio))
+        if controls.get("show_theta_power"):
+            panels.append(("theta_power", _plot_theta_power))
 
     if session.has_behavior:
         # Mobility + velocity on one panel, each shown raw and subsampled onto the
