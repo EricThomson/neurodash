@@ -11,6 +11,10 @@ Then, from the command line, install neurodash as a tool using uv:
 
 Then, run neurodash by entering `neurodash` at the command line. 
 
+To update to latest version of neurodash:
+
+    uv tool upgrade neurodash
+
 ## Development
 In your cli:
 
@@ -22,7 +26,6 @@ In your cli:
     python app.py
 
 ## Roadmap
-- export csv/png
 - Arena calibration scaling.
 - docs
   - basic how to use
