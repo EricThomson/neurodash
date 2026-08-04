@@ -23,7 +23,8 @@ from neurodash.config import (
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
 from neurodash.app_state import last_browse_dir, remember_browse_dir
-from neurodash.file_picker import pick_file, pick_save_path
+from neurodash.file_picker import pick_file, pick_save_path, pick_directory
+from neurodash import merge
 from neurodash.behavior_io import (
     get_display_metadata, load_behavior_notes, save_behavior_notes,
 )
@@ -1072,3 +1073,78 @@ def save_behavior_comment(comment, behavior_path):
         return no_update
     save_behavior_notes(behavior_path, {"comment": new_comment})
     return new_comment
+
+
+# ---------------------------------------------------------------------------
+# Merge — combine per-animal analysis exports into one table
+#
+# Independent of the loaded session: this reads already-exported CSVs from a
+# folder. Scanning happens on folder selection (so the file list and any
+# problems are visible before committing), compatibility is checked at merge
+# time (so unticking a file can resolve a conflict without re-scanning).
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("div-merge-folder", "children"),
+    Output("check-merge-files", "options"),
+    Output("check-merge-files", "value"),
+    Output("div-merge-status", "children"),
+    Input("btn-merge-folder", "n_clicks"),
+    prevent_initial_call=True,
+)
+def browse_merge_folder(n_clicks):
+    """Pick a folder and list the analysis exports in it, all ticked."""
+    folder = pick_directory("Select folder of analysis exports", last_browse_dir())
+    if not folder:
+        return no_update, no_update, no_update, ""
+
+    remember_browse_dir(folder)
+    entries, problems = merge.scan_folder(folder)
+    options = [{"label": f" {e['animal']} ({e['name']})", "value": str(e["path"])}
+               for e in entries]
+    value = [opt["value"] for opt in options]
+
+    status = "\n".join(f"Skipped {p}" for p in problems)
+    if not entries:
+        status = (f"No {merge.ANALYSIS_GLOB} files in that folder.\n{status}").strip()
+    return folder, options, value, status
+
+
+@callback(
+    Output("div-merge-status", "children", allow_duplicate=True),
+    Input("btn-merge-run", "n_clicks"),
+    State("check-merge-files", "value"),
+    prevent_initial_call=True,
+)
+def run_merge(n_clicks, selected_paths):
+    """Merge the ticked exports into one CSV, or explain why they can't be."""
+    if not selected_paths:
+        return "Select a folder and tick the files to merge."
+    if len(selected_paths) < 2:
+        return "Tick at least two files to merge."
+
+    entries, problems = [], []
+    for path in selected_paths:
+        try:
+            meta, df = merge.read_analysis_csv(path)
+        except Exception as e:
+            problems.append(f"{Path(path).name}: could not be read ({e})")
+            continue
+        entries.append({"path": Path(path), "name": Path(path).name,
+                        "animal": meta.get("animal") or str(df["animal"].iloc[0]),
+                        "meta": meta, "df": df})
+    if problems:
+        return "\n".join(problems)
+
+    entries.sort(key=lambda e: e["animal"])
+    reasons = merge.check_compatible(entries)
+    if reasons:
+        return merge.refusal_message(reasons)
+
+    out_path = _ask_export_path("merged_analysis.csv")
+    if not out_path:
+        return ""
+
+    df = merge.merge_tables(entries)
+    out = _write_export(df, out_path, comment=merge.merged_header(entries))
+    return f"Merged {len(entries)} animals ({len(df)} rows) to {out}"

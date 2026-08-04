@@ -39,6 +39,7 @@ _SECTION_STYLE_BASE = {
 _NEURAL_SECTION = {**_SECTION_STYLE_BASE, "backgroundColor": "#eef3f8"}
 _BEHAVIOR_SECTION = {**_SECTION_STYLE_BASE, "backgroundColor": "#eef8f0"}
 _VIEWER_SECTION = {**_SECTION_STYLE_BASE, "backgroundColor": "#f5f5f5"}
+_MERGE_SECTION = {**_SECTION_STYLE_BASE, "backgroundColor": "#f8f4ee"}
 
 _SECTION_HEADER = {
     "fontWeight": "bold",
@@ -120,6 +121,31 @@ def _left_sidebar():
                     html.Div(id="div-video-filename", style={"marginTop": "4px", "fontSize": "0.85em", "color": "#555"}),
                 ],
                 style=_VIEWER_SECTION,
+            ),
+
+            # --- Merge section: combine per-animal analysis exports into one
+            # table. Always visible — this works on a folder of already-exported
+            # CSVs and has nothing to do with the currently loaded session. ---
+            html.Div(
+                [
+                    html.Div("Merge Data", style=_SECTION_HEADER),
+                    html.Button("Select folder", id="btn-merge-folder", n_clicks=0,
+                                title="Pick a folder of exported *_analysis.csv files "
+                                      "to combine into one table."),
+                    html.Div(id="div-merge-folder",
+                             style={"marginTop": "4px", "fontSize": "0.8em", "color": "#555",
+                                    "wordBreak": "break-all"}),
+                    dcc.Checklist(id="check-merge-files", options=[], value=[],
+                                  style={"marginTop": "6px", "fontSize": "0.85em"}),
+                    html.Button("Merge selected", id="btn-merge-run", n_clicks=0,
+                                style={"marginTop": "6px"}),
+                    # Multi-line, unlike the single-line export status spans — a
+                    # refusal lists which files disagree and what to do about it.
+                    html.Div(id="div-merge-status",
+                             style={"marginTop": "6px", "fontSize": "0.8em", "color": "#555",
+                                    "whiteSpace": "pre-line"}),
+                ],
+                style=_MERGE_SECTION,
             ),
         ],
         style={
@@ -250,8 +276,7 @@ def _right_sidebar():
                 [
                     html.Div("Theta", style=_SECTION_HEADER),
                     html.Label("Low (Hz)",
-                               title="Theta band lower edge. Peak theta = argmax frequency in "
-                                     "Low–High; theta power = mean power across it.",
+                               title="Lower limit of the theta band.",
                                style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-theta-low",
@@ -262,8 +287,7 @@ def _right_sidebar():
                         style={"width": "100%", "marginBottom": "6px"},
                     ),
                     html.Label("High (Hz)",
-                               title="Theta band upper edge. Peak theta = argmax frequency in "
-                                     "Low–High; theta power = mean power across it.",
+                               title="Upper limit of the theta band.",
                                style={"fontSize": "0.8em"}),
                     dcc.Input(
                         id="input-theta-high",
@@ -276,10 +300,8 @@ def _right_sidebar():
                     # Estimator — argmax pins to the band edge when delta bleeds in;
                     # bandpass filters the LFP first, so there is no delta left to leak.
                     html.Label("Peak estimator",
-                               title="argmax = largest power in the band (original). "
-                                     "bandpass = filter the LFP to just outside the band "
-                                     "first, then argmax. Stops delta's flank pinning the "
-                                     "estimate to the 4 Hz edge.",
+                               title="Whether to bandpass filter the LFP around the theta "
+                                     "band before finding the peak.",
                                style={"fontSize": "0.8em"}),
                     dcc.RadioItems(
                         id="radio-theta-estimator",
@@ -320,11 +342,8 @@ def _right_sidebar():
                     html.Div("Ratio bands", style={**_SECTION_HEADER,
                                                    "marginTop": "4px"}),
                     html.Label("Low band (Hz)",
-                               title="Lower sub-band of the theta ratio. Ratio = "
-                                     "(low - high) / (low + high) of mean power, so it "
-                                     "is positive when slow theta dominates. Defaults "
-                                     "are James Ward's bands (6.1-7.4 / 7.5-8.8). Must "
-                                     "stay inside the theta band above.",
+                               title="Frequency bounds for low theta, used to calculate "
+                                     "the theta ratio.",
                                style={"fontSize": "0.8em"}),
                     html.Div(
                         [
@@ -348,7 +367,8 @@ def _right_sidebar():
                         style={"display": "flex", "marginBottom": "6px"},
                     ),
                     html.Label("High band (Hz)",
-                               title="Upper sub-band of the theta ratio. See Low band.",
+                               title="Frequency bounds for high theta, used to calculate "
+                                     "the theta ratio.",
                                style={"fontSize": "0.8em"}),
                     html.Div(
                         [
@@ -418,7 +438,7 @@ def make_layout():
                                     html.Button(
                                         "Export analysis CSV",
                                         id="btn-download-analysis-csv", n_clicks=0,
-                                        title="Theta peak/power and behavior on one time base "
+                                        title="Theta peak/power/ratio and behavior on one time base "
                                               "(the spectrogram bins), written to a CSV you choose.",
                                     ),
                                     html.Span(id="div-analysis-export-status",

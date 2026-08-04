@@ -13,9 +13,10 @@ Why this exists:
     On Windows, SetForegroundWindow forces the dialog in front of the browser.
 
 Usage from Dash callback:
-    from neurodash.file_picker import pick_file, pick_save_path
+    from neurodash.file_picker import pick_file, pick_save_path, pick_directory
     path = pick_file("Select .pl2 file", "Plexon (*.pl2)")
     out = pick_save_path("Export analysis CSV", "CSV (*.csv)", d, "FC33-4_analysis.csv")
+    folder = pick_directory("Select folder of exports", d)
 """
 
 import subprocess
@@ -62,6 +63,19 @@ def pick_save_path(title, filter_str, start_dir="", default_name=""):
     return _run_dialog("save", title, filter_str, start_dir, default_name)
 
 
+def pick_directory(title, start_dir=""):
+    """Open a native folder picker and return the selected directory.
+
+    Used by the merge feature, which works on a whole folder of exports rather
+    than a hand-picked list — at 20+ animals, ctrl-clicking 20 files is both
+    tedious and easy to get wrong. Picking one folder also keeps the subprocess's
+    single-line stdout contract intact (one path in, one path out).
+
+    Returns empty string if user cancels.
+    """
+    return _run_dialog("dir", title, "", start_dir, "")
+
+
 def _run_dialog(mode, title, filter_str, start_dir, default_name):
     result = subprocess.run(
         [sys.executable, __file__, mode, title, filter_str, start_dir, default_name],
@@ -93,6 +107,9 @@ if __name__ == "__main__":
         dialog.setDefaultSuffix("csv")
         if default_name:
             dialog.selectFile(default_name)
+    elif mode == "dir":
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
     dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
     dialog.show()
     # Force window to foreground (Windows only)
