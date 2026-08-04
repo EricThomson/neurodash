@@ -3,15 +3,17 @@
 Lightweight dashboard for exploratory analysis of neurobehavioral data.
 
 ## Usage
-Install uv locally following the instructions here: https://docs.astral.sh/uv/getting-started/installation/
+Install uv locally following the instructions here:    
+    
+    https://docs.astral.sh/uv/getting-started/installation/
 
-Then, from the command line, install neurodash as a tool using uv:
+Install neurodash:    
 
-  uv tool install neurodash
+    uv tool install neurodash
 
 Then, run neurodash by entering `neurodash` at the command line. 
 
-To update to latest version of neurodash:
+To update to latest version of neurodash:    
 
     uv tool upgrade neurodash
 
