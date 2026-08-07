@@ -35,7 +35,7 @@ from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_c
 from neurodash.session import (
     load_session_from_paths, compute_spectrogram, compute_theta_channels,
 )
-from neurodash.channel_io import load_channels, save_channels
+from neurodash.channel_io import load_channels, save_channels, resolve_animal_id
 from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
 
 
@@ -46,63 +46,72 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 @callback(
     Output("store-neural-path", "data"),
     Output("div-neural-filename", "children"),
-    Output("div-neural-metadata", "children"),
     Output("dropdown-channels", "options"),
     Output("dropdown-channels", "value"),
     Output("dropdown-spectrogram-channel", "options"),
     Output("dropdown-spectrogram-channel", "value"),
     Input("btn-browse-neural", "n_clicks"),
-    State("store-behavior-path", "data"),
 )
-def browse_neural(n_clicks, behavior_path):
+def browse_neural(n_clicks):
     if not n_clicks:
         # Initial page load — autoload the default file (temporary dev convenience).
         if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_NEURAL_PATH).exists():
-            return (no_update,) * 7
+            return (no_update,) * 6
         path = AUTOLOAD_NEURAL_PATH
     else:
         path = pick_file("Select .pl2 file", "Plexon (*.pl2)", last_browse_dir())
     if not path:
-        return (no_update,) * 7
+        return (no_update,) * 6
     remember_browse_dir(path)
 
-    # Behavior comes along so the animal ID resolves from the EthoVision header
-    # rather than the filename (resolve_animal_id); it's lru_cached, so if the
-    # Session Viewer already loaded it this is free.
-    session = load_session_from_paths(path, behavior_path or "")
+    session = load_session_from_paths(path, "")
     sig_info = session.analog_signal_summaries[0]
     options = [
         {"label": lbl, "value": idx}
         for idx, lbl in zip(sig_info["channel_indices"], sig_info["channel_labels"])
     ]
 
-    # Channel sidecar — source of the (filename-inferred) animal ID and exemplar.
-    channel_data = load_channels(path, session)
-
-    # Build metadata display
-    dur = sig_info["duration_sec"]
-    minutes = int(dur // 60)
-    seconds = dur % 60
-    rec_dt = session.rec_datetime
-    dt_str = rec_dt.strftime("%Y-%m-%d %H:%M") if rec_dt else "Unknown"
-
-    metadata = html.Div([
-        html.Div(f"Mouse: {channel_data.get('animal') or 'Unknown'}"),
-        html.Div(f"Recorded: {dt_str}"),
-        html.Div(f"Duration: {minutes}m {seconds:.1f}s"),
-        html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
-        html.Div(f"Channels: {sig_info['n_channels']}"),
-    ])
-
     # Seed the default selected channel from a saved exemplar (if any).
     default_channel = 0
     if EXEMPLAR_SEEDS_DEFAULT_CHANNEL:
-        ex = channel_data.get("exemplar_channel_index")
+        ex = load_channels(path, session).get("exemplar_channel_index")
         if ex is not None and 0 <= ex < sig_info["n_channels"]:
             default_channel = ex
 
-    return (path, Path(path).name, metadata, options,
+    return (path, Path(path).name, options,
             [default_channel], options, default_channel)
+
+
+@callback(
+    Output("div-neural-metadata", "children"),
+    Input("store-neural-path", "data"),
+    Input("store-behavior-path", "data"),
+)
+def render_neural_metadata(neural_path, behavior_path):
+    """The neural sidebar block, rebuilt whenever *either* file changes.
+
+    Split out of browse_neural for the animal ID: it resolves from the EthoVision
+    header when there's a behavior file, so a block built only at pl2-load time
+    would show the filename-derived ID whenever the pl2 was loaded first, and
+    disagree with the Channel Viewer and the exports. Both sessions are
+    lru_cached, so reacting to both stores costs nothing.
+    """
+    if not neural_path:
+        return no_update
+
+    session = load_session_from_paths(neural_path, behavior_path or "")
+    sig_info = session.analog_signal_summaries[0]
+    dur = sig_info["duration_sec"]
+    rec_dt = session.rec_datetime
+    animal = resolve_animal_id(session.pl2_path, session.behavior_metadata)
+
+    return html.Div([
+        html.Div(f"Mouse: {animal or 'Unknown'}"),
+        html.Div(f"Recorded: {rec_dt.strftime('%Y-%m-%d %H:%M') if rec_dt else 'Unknown'}"),
+        html.Div(f"Duration: {int(dur // 60)}m {dur % 60:.1f}s"),
+        html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
+        html.Div(f"Channels: {sig_info['n_channels']}"),
+    ])
 
 
 def _load_error(message):
@@ -655,17 +664,18 @@ def _spect_params(window, step, c, max_freq):
     Output("input-channel-comment", "value"),
     Input("tabs-main", "value"),
     Input("store-neural-path", "data"),
+    # Input, not State: loading a behavior file changes the resolved animal ID,
+    # so the Channel Viewer's header has to follow it.
+    Input("store-behavior-path", "data"),
     State("store-view-range", "data"),
     State("input-spect-window", "value"),
     State("input-spect-step", "value"),
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
-    State("store-behavior-path", "data"),
     prevent_initial_call=True,
 )
-def render_channel_tab(tab_value, neural_path, view_range,
-                       spect_window, spect_step, spect_c, spect_max_freq,
-                       behavior_path):
+def render_channel_tab(tab_value, neural_path, behavior_path, view_range,
+                       spect_window, spect_step, spect_c, spect_max_freq):
     """Build the Channel Viewer when its tab is opened *or* a new file is loaded,
     at the current window. Refreshing on file load (not just tab switch) keeps the
     comment/annotations tied to the loaded recording — no stale bleed from a
@@ -677,7 +687,7 @@ def render_channel_tab(tab_value, neural_path, view_range,
                          style={"color": "#999", "padding": "20px"}),
                 no_update, no_update, no_update)
 
-    session = load_session_from_paths(neural_path, "")
+    session = load_session_from_paths(neural_path, behavior_path or "")
     channel_data = load_channels(session.pl2_path, session)
     params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
     return (build_channel_view(session, channel_data, view_range, params),
@@ -755,22 +765,24 @@ def refresh_exemplar_stars(exemplar_idx, ids):
     State({"type": "channel-comment", "index": ALL}, "id"),
     State({"type": "channel-include", "index": ALL}, "id"),
     State("store-neural-path", "data"),
+    State("store-behavior-path", "data"),
     prevent_initial_call=True,
 )
 def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comment,
-                       quality_ids, comment_ids, include_ids, neural_path):
+                       quality_ids, comment_ids, include_ids, neural_path,
+                       behavior_path):
     """Silently persist the channel record whenever a rating/comment/include/exemplar/note changes.
 
     Rebuilds from the UI (which holds the complete state) and writes only when
     something actually differs from the sidecar — so re-opening the Channel Viewer,
     which re-fires these inputs, does not trigger a spurious write. No user-facing
     confirmation (the sink store just satisfies the callback's Output requirement).
-    The animal ID is filename-derived and read-only, so it is not edited here.
+    The animal ID is resolved on load and read-only, so it is not edited here.
     """
     if not neural_path or not quality_ids:
         return no_update
 
-    session = load_session_from_paths(neural_path, "")
+    session = load_session_from_paths(neural_path, behavior_path or "")
     channel_data = load_channels(session.pl2_path, session)
     quality_by_idx = {qid["index"]: (q or "") for qid, q in zip(quality_ids, qualities)}
     comment_by_idx = {cid["index"]: (c or "") for cid, c in zip(comment_ids, comments)}
@@ -804,7 +816,8 @@ def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comm
 # CSV export
 # ---------------------------------------------------------------------------
 
-_NO_ANIMAL_HINT = "No animal ID (check the recording filename) — can't export."
+_NO_ANIMAL_HINT = ("No animal ID — expected it in the EthoVision header ('Mouse ID') "
+                   "or at the end of the .pl2 filename. Can't export.")
 
 
 def _ask_export_path(default_name):
@@ -971,13 +984,14 @@ def _analysis_header(session, animal, behavior_path, channel_data,
     Output("div-channel-export-status", "children"),
     Input("btn-download-channel-csv", "n_clicks"),
     State("store-neural-path", "data"),
+    State("store-behavior-path", "data"),
     prevent_initial_call=True,
 )
-def export_channel_csv(n_clicks, neural_path):
+def export_channel_csv(n_clicks, neural_path, behavior_path):
     """Write the LFP signal (animal, time, one column per checked channel) to CSV."""
     if not neural_path:
         return no_update
-    session = load_session_from_paths(neural_path, "")
+    session = load_session_from_paths(neural_path, behavior_path or "")
     channel_data = load_channels(session.pl2_path, session)
     if not channel_data.get("animal"):
         return _NO_ANIMAL_HINT
@@ -1031,12 +1045,13 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
 
-    # animal always comes from the neural sidecar — behavior files don't carry it.
     channel_data = {}
-    animal = ""
     if neural_path:
         channel_data = load_channels(session.pl2_path, session)
-        animal = channel_data.get("animal", "")
+    # One resolver everywhere — the EthoVision header wins, the pl2 filename is
+    # the fallback. Behavior-only exports can name their animal too, which the
+    # old sidecar-only path couldn't.
+    animal = resolve_animal_id(session.pl2_path, session.behavior_metadata)
     if not animal:
         return _NO_ANIMAL_HINT
 
