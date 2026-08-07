@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "neurodash"
-version = "0.0.9"
+version = "0.0.10"
 description = "Web dashboard neurobehavioral data explorer."
 readme = "README.md"
 requires-python = ">=3.12"
