@@ -46,6 +46,11 @@ _OFFSET_Y = -22.9
 # playback and short forward scrubs on the cheap sequential decode path.
 _MAX_SEQ_SKIP = 15
 
+# Brightness slider half-range, in units where 50 = one doubling of gain
+# (+50 -> 2× brighter, -50 -> half). ±100 is ±2 stops, which covers the dark
+# recordings without letting the control run off into uselessness.
+_BRIGHTNESS_RANGE = 100
+
 
 # ---------------------------------------------------------------------------
 # Data loading helpers
@@ -152,7 +157,9 @@ class NeurodashViewer(QMainWindow):
             self._video_stream.thread_type = "AUTO"
             self._decode_gen = None      # live sequential decode generator
             self._decode_next_idx = -1   # frame index the generator yields next
-            self._img_levels = None      # display levels, fixed once from first frame
+            self._base_levels = None     # (lo, hi) latched from the first frame
+            self._img_levels = None      # those levels after the brightness gain
+            self._last_frame = None      # last decoded frame, to repaint on a levels change
         else:
             self.fps = 30.0
             self.frame_offset = 0
@@ -178,11 +185,39 @@ class NeurodashViewer(QMainWindow):
         self.main_splitter.addWidget(self.top_splitter)
 
         if has_video:
+            # Video pane: the image with its own image controls directly beneath.
+            # Brightness belongs here rather than in the transport row below —
+            # it acts on the picture, not on time.
+            video_panel = QWidget()
+            video_layout = QVBoxLayout(video_panel)
+            video_layout.setContentsMargins(0, 0, 0, 0)
+            video_layout.setSpacing(2)
+
             self.image_view = pg.ImageView()
             self.image_view.ui.roiBtn.hide()
             self.image_view.ui.menuBtn.hide()
             self.image_view.ui.histogram.hide()
-            self.top_splitter.addWidget(self.image_view)
+            video_layout.addWidget(self.image_view)
+
+            image_controls = QHBoxLayout()
+            image_controls.setContentsMargins(0, 0, 0, 0)
+            image_controls.addWidget(QLabel("Brightness:"))
+            self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+            self.brightness_slider.setMinimum(-_BRIGHTNESS_RANGE)
+            self.brightness_slider.setMaximum(_BRIGHTNESS_RANGE)
+            self.brightness_slider.setValue(0)
+            # Ticks at -range / 0 / +range, so the centre one marks the default
+            # (the levels the video came in at) and you can find your way back.
+            self.brightness_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+            self.brightness_slider.setTickInterval(_BRIGHTNESS_RANGE)
+            self.brightness_slider.setToolTip(
+                "Brighten or darken the video image. Display only — the data is untouched."
+            )
+            self.brightness_slider.valueChanged.connect(self.on_brightness_changed)
+            image_controls.addWidget(self.brightness_slider, stretch=1)
+            video_layout.addLayout(image_controls)
+
+            self.top_splitter.addWidget(video_panel)
             self.dot = pg.ScatterPlotItem(size=12, pen=pg.mkPen(None), brush=pg.mkBrush(255, 50, 50, 220))
             self.image_view.getView().addItem(self.dot)
         else:
@@ -417,17 +452,44 @@ class NeurodashViewer(QMainWindow):
                 return frame.to_ndarray(format="rgb24")
         return None  # past end of video
 
+    def _draw_frame(self, frame):
+        self.image_view.setImage(
+            frame.transpose(1, 0, 2),
+            autoLevels=False, autoRange=False, levels=self._img_levels,
+        )
+
+    def _apply_brightness(self):
+        """Recompute display levels from the base levels and the slider.
+
+        Brightness is a pure gain on the white point: the black point stays put
+        and the top of the range slides down, which is what a too-dark video
+        needs. Levels are applied by the ImageItem at paint time, so this costs
+        nothing per frame — no numpy work in the playback path.
+        """
+        lo, hi = self._base_levels
+        span = max(hi - lo, 1.0)
+        gain = 2.0 ** (self.brightness_slider.value() / 50.0)
+        self._img_levels = (lo, lo + span / gain)
+
+    def on_brightness_changed(self):
+        if self._base_levels is None:
+            return
+        self._apply_brightness()
+        # Repaint the frame we already have — decoding it again would mean a
+        # keyframe seek on every tick of the slider drag.
+        if self._last_frame is not None:
+            self._draw_frame(self._last_frame)
+
     def show_frame(self, behavior_idx):
         if self._has_video:
             video_idx = behavior_idx + self.frame_offset
             frame = self._read_video_frame(video_idx)
             if frame is not None:
-                if self._img_levels is None:
-                    self._img_levels = (float(frame.min()), float(frame.max()))
-                self.image_view.setImage(
-                    frame.transpose(1, 0, 2),
-                    autoLevels=False, autoRange=False, levels=self._img_levels,
-                )
+                if self._base_levels is None:
+                    self._base_levels = (float(frame.min()), float(frame.max()))
+                    self._apply_brightness()
+                self._last_frame = frame
+                self._draw_frame(frame)
 
         if self._has_behavior:
             t = self.t_behav[min(behavior_idx, len(self.t_behav) - 1)]
