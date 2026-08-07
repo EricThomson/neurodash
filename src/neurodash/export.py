@@ -59,10 +59,11 @@ def _behavior_columns(session, times, step):
 
 
 def build_analysis_table(session, animal, channel_indices, band, spect_params,
-                         estimator=None, ratio_low_band=None, ratio_high_band=None):
+                         session_name="", estimator=None,
+                         ratio_low_band=None, ratio_high_band=None):
     """Merged per-time-bin table for CSV export — one row per bin, channels in columns.
 
-    Columns: animal, time, then theta_peak_<CH> for each saved channel, then
+    Columns: animal, session, time, then theta_peak_<CH> for each saved channel, then
     theta_power_<CH>, then theta_ratio_<CH>, then velocity, mobility, x, y.
     Grouped by variable rather than by channel so "select these and overlay" is one
     contiguous block of columns. Units are in the header, not the names.
@@ -91,6 +92,10 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
     ----------
     session : Session
     animal : str — animal ID, same for every row so tables concat across animals.
+    session_name : str — session label ('hab1'), same for every row. A column, not
+        just a header field, because merging day 1 with day 2 needs it to tell the
+        rows apart — and `time` is seconds *into a session*, so the same value
+        recurs across days and grouping on time alone would silently pool them.
     channel_indices : sequence of int — channels to export theta for. A bare int is
         accepted for convenience and treated as a single-channel list.
     band : (float, float) — theta band low/high in Hz.
@@ -113,7 +118,8 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
     if not session.has_neural:
         # No spectrogram, so no spectral grid and no theta columns at all.
         times = session.behavior_data["Recording time"].to_numpy(dtype=float)
-        return pd.DataFrame({"animal": animal, "time": times,
+        return pd.DataFrame({"animal": animal, "session": session_name,
+                             "time": times,
                              **_behavior_columns(session, None, step)})
 
     if isinstance(channel_indices, (int, np.integer)):
@@ -146,7 +152,7 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
         per_channel["theta_power"][label] = power
         per_channel["theta_ratio"][label] = ratio
 
-    columns = {"animal": animal, "time": times}
+    columns = {"animal": animal, "session": session_name, "time": times}
     for variable, by_label in per_channel.items():
         for label, values in by_label.items():
             columns[f"{variable}_{label}"] = values

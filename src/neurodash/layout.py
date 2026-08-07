@@ -55,6 +55,10 @@ _META_STYLE = {"marginTop": "6px", "fontSize": "0.85em", "color": "#555"}
 _CHANNEL_COL_HEADER = {"fontSize": "0.8em", "fontWeight": "bold", "color": "#555",
                        "marginBottom": "2px"}
 
+_IDENTITY_LABEL = {"fontSize": "0.85em", "color": "#555", "width": "58px",
+                   "flexShrink": "0"}
+_IDENTITY_INPUT = {"flex": "1", "minWidth": "0", "fontSize": "0.9em"}
+
 
 # ---------------------------------------------------------------------------
 # Left sidebar — data loading & metadata
@@ -64,6 +68,45 @@ def _left_sidebar():
     return html.Div(
         [
             html.Img(src=LOGO_PATH, style={"width": "100%", "marginBottom": "12px"}),
+
+            # --- Session identity ---
+            # Above the data sections because it labels the whole recording, and
+            # because it's what every export leads with. Inferred, but editable:
+            # both fields come from free text somebody typed into EthoVision, so
+            # they are wrong often enough that a correction has to be possible
+            # without renaming files.
+            html.Div(
+                [
+                    html.Div("Session Info", style=_SECTION_HEADER),
+                    # title goes on the row, not the Input — dcc.Input has no title prop.
+                    html.Div(
+                        [
+                            html.Label("Animal", style=_IDENTITY_LABEL),
+                            dcc.Input(id="input-animal", type="text", disabled=True,
+                                      debounce=True, style=_IDENTITY_INPUT),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
+                        title="Animal ID. Inferred from the EthoVision header, "
+                              "else the .pl2 filename.",
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Session", style=_IDENTITY_LABEL),
+                            dcc.Input(id="input-session", type="text", disabled=True,
+                                      debounce=True, style=_IDENTITY_INPUT),
+                        ],
+                        style={"display": "flex", "alignItems": "center",
+                               "marginTop": "3px"},
+                        title="Session label, e.g. hab1. Inferred from the "
+                              "EthoVision Session field.",
+                    ),
+                    html.Button("Edit", id="btn-edit-identity", n_clicks=0,
+                                style={"marginTop": "5px", "fontSize": "0.8em"},
+                                title="Correct the animal or session label."),
+                    html.Div(id="div-identity-status", style=_META_STYLE),
+                ],
+                style={"marginBottom": "12px"},
+            ),
 
             # --- Neural section ---
             html.Div(

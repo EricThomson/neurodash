@@ -1,15 +1,17 @@
 """Combine per-animal `_analysis.csv` exports into one JMP-ready table.
 
-neurodash exports one analysis table per animal. Analysis in JMP wants them stacked
-into a single long-format table — `time`, `animal`, then the same derived columns.
-Because every export already leads with `animal` and shares a time base, that is a
+neurodash exports one analysis table per animal per session. Analysis in JMP wants
+them stacked into a single table — `session`, `time`, `animal`, then the same derived
+columns. Because every export already carries those and shares a time base, that is a
 plain concat; the work here is deciding *whether* a set of files may be concatenated,
 and reading the `#` provenance header back in (nothing else in the codebase does).
 
 The rule that matters: a merged column has to mean the same thing in every row. The
 analysis parameters (window/step/c/max_freq, theta band, ratio bands, estimator) are
-therefore required to match across files, while the session facts (animal, source,
-channel, times, comments) are expected to differ — that is the point of merging.
+therefore required to match across files, while the per-recording facts (animal,
+session, source, channels, times, comments) are expected to differ — that is the
+point of merging. **The same animal across several days is the main case**, which is
+why the uniqueness key is animal *and* session rather than animal alone.
 
 Enforcing the first group is also what keeps the merged header small and, more
 importantly, a FIXED height. If parameters could vary they would have to be recorded
@@ -121,6 +123,13 @@ def scan_folder(folder):
             problems.append(f"{path.name}: not a neurodash analysis export "
                             f"(no animal/time columns)")
             continue
+        if "session" not in df.columns:
+            # Without it there is no way to tell day 1 from day 2, and `time` is
+            # seconds *into* a session, so the rows would look like duplicates of
+            # each other. Refuse rather than merge something ungroupable.
+            problems.append(f"{path.name}: exported before the session column — "
+                            f"re-export it from the Session Viewer")
+            continue
         if _is_superseded_layout(df):
             # Concatenating one of these with a current export would leave two
             # columns meaning the same thing, each half NaN, and the older one not
@@ -133,10 +142,11 @@ def scan_folder(folder):
             "path": path,
             "name": path.name,
             "animal": meta.get("animal") or str(df["animal"].iloc[0]),
+            "session": meta.get("session") or str(df["session"].iloc[0]),
             "meta": meta,
             "df": df,
         })
-    entries.sort(key=lambda e: e["animal"])
+    entries.sort(key=lambda e: (e["animal"], e["session"]))
     return entries, problems
 
 
@@ -187,13 +197,20 @@ def check_compatible(entries):
             f"    Fix: re-export those with the same settings as the rest."
         )
 
-    duplicates = _group_by_value(entries, "animal")
-    for animal, files in sorted(duplicates.items()):
+    # One row per animal per SESSION per time bin. The same animal across several
+    # days is the point of merging, so only a repeated animal+session pair is a real
+    # duplicate — that would be two exports of one recording, and a single export
+    # already carries every channel that was ticked to save.
+    duplicates = {}
+    for entry in entries:
+        duplicates.setdefault((entry["animal"], entry["session"]), []).append(entry["name"])
+    for (animal, session), files in sorted(duplicates.items()):
         if len(files) > 1:
             reasons.append(
-                f"Animal {animal} appears in {len(files)} files: {', '.join(files)}.\n"
-                f"    Each animal may appear once — one row per animal per time bin,\n"
-                f"    and one export already carries every channel you ticked to save.\n"
+                f"Animal {animal} appears {len(files)} times in session "
+                f"'{session}': {', '.join(files)}.\n"
+                f"    An animal may appear once per session — different sessions of\n"
+                f"    the same animal are fine, and are the point of merging.\n"
                 f"    Fix: untick all but one, re-exporting with all the channels you\n"
                 f"    want if they're split across files."
             )
@@ -214,8 +231,14 @@ def refusal_message(reasons):
 def merge_tables(entries):
     """Stack the entries into one long-format table.
 
-    Column order is ``time, animal, <the rest as exported>``; rows are sorted by
-    time then animal, so each time bin's animals sit together.
+    Column order and sort are both ``session, time, animal`` — the leftmost columns
+    read in sort order, so the file explains its own layout. **Session is the OUTER
+    key**: the whole hab1 block first, then hab2, each internally in time order with
+    a time bin's animals together. Sorting by time first would interleave the days,
+    which is not how anyone reads these.
+
+    Sessions order alphabetically, which is what you want for hab1/hab2/hab3 (and
+    would put hab10 before hab2, if it ever came to that).
 
     Animals that saved different channels contribute different theta columns, so
     the concat leaves NaN where an animal didn't save that channel. That is the
@@ -229,9 +252,10 @@ def merge_tables(entries):
     # before the sort costs nothing and stops float drift from splitting a time bin.
     merged["time"] = merged["time"].round(6)
 
-    rest = [c for c in merged.columns if c not in ("time", "animal")]
-    merged = merged[["time", "animal"] + rest]
-    return merged.sort_values(["time", "animal"], kind="stable").reset_index(drop=True)
+    lead = [c for c in ("session", "time", "animal") if c in merged.columns]
+    rest = [c for c in merged.columns if c not in lead]
+    merged = merged[lead + rest]
+    return merged.sort_values(lead, kind="stable").reset_index(drop=True)
 
 
 def merged_header(entries):

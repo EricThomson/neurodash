@@ -142,6 +142,16 @@ def get_mouse_id(metadata):
     return _user_defined(metadata, 'mouse id', 'animal id', 'rat id')
 
 
+def get_session_name(metadata):
+    """Session label as the experimenter recorded it ('hab 1'), or None.
+
+    Another user-defined variable, so the same case-insensitive lookup as
+    get_mouse_id — and, like it, absent from older exports (FC33-4 has none).
+    Canonicalized by channel_io.resolve_session_name before it is used as a key.
+    """
+    return _user_defined(metadata, 'session', 'session name', 'phase')
+
+
 def get_recording_delay(metadata):
     """Parse 'Recording after' delay from EthoVision metadata.
 
@@ -279,19 +289,19 @@ def estimate_position_pixels(x, y, video_width, video_height,
 
 # ---------------------------------------------------------------------------
 # Behavior notes — a free-text comment on the whole recording, persisted as a
-# JSON sidecar (<stem>.behavior.json) next to the Excel file, like the channel
-# sidecar. Reloads on the next open.
+# companion file (<stem>.behavior.json) saved next to the Excel file, the same
+# way channel annotations are. Reloads on the next open.
 # ---------------------------------------------------------------------------
 
-def behavior_sidecar_path(behavior_path):
-    """Return the notes sidecar path: <stem>.behavior.json beside the Excel file."""
+def behavior_notes_path(behavior_path):
+    """Where the notes are kept: <stem>.behavior.json, beside the Excel file."""
     p = Path(behavior_path)
     return p.parent / (p.stem + ".behavior.json")
 
 
 def load_behavior_notes(behavior_path):
-    """Load the behavior notes sidecar, or a blank record if none exists."""
-    path = behavior_sidecar_path(behavior_path)
+    """Load the behavior notes, or a blank record if none have been written."""
+    path = behavior_notes_path(behavior_path)
     if path.exists():
         try:
             with open(path) as f:
@@ -303,12 +313,12 @@ def load_behavior_notes(behavior_path):
 
 
 def save_behavior_notes(behavior_path, notes):
-    """Write the behavior notes sidecar next to the Excel file."""
+    """Write the behavior notes to their companion file next to the Excel file."""
     payload = {
         "comment": notes.get("comment", ""),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
-    with open(behavior_sidecar_path(behavior_path), "w") as f:
+    with open(behavior_notes_path(behavior_path), "w") as f:
         json.dump(payload, f, indent=2)
 
 

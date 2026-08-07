@@ -35,7 +35,10 @@ from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_c
 from neurodash.session import (
     load_session_from_paths, compute_spectrogram, compute_theta_channels,
 )
-from neurodash.channel_io import load_channels, save_channels, resolve_animal_id
+from neurodash.channel_io import (
+    load_channels, save_channels, resolve_animal_id, resolve_session_name,
+    load_identity, save_identity, canonical_id,
+)
 from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
 
 
@@ -116,6 +119,72 @@ def render_neural_metadata(neural_path, behavior_path):
         html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
         html.Div(f"Channels: {sig_info['n_channels']}"),
     ])
+
+
+# ---------------------------------------------------------------------------
+# Session identity — animal and session label, inferred and editable
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("input-animal", "value"),
+    Output("input-session", "value"),
+    Input("store-neural-path", "data"),
+    Input("store-behavior-path", "data"),
+)
+def fill_identity(neural_path, behavior_path):
+    """Seed Animal and Session when either file changes.
+
+    A saved override wins over inference — that's the whole point of letting it be
+    edited — but inference fills anything not overridden, so a fresh recording
+    needs no typing.
+    """
+    if not neural_path and not behavior_path:
+        return no_update, no_update
+
+    session = load_session_from_paths(neural_path or "", behavior_path or "")
+    saved = load_identity(session.pl2_path)
+    animal = saved["animal"] or resolve_animal_id(session.pl2_path,
+                                                  session.behavior_metadata)
+    label = saved["session"] or resolve_session_name(session.behavior_metadata)
+    return animal, label
+
+
+@callback(
+    Output("input-animal", "disabled"),
+    Output("input-session", "disabled"),
+    Output("btn-edit-identity", "children"),
+    Input("btn-edit-identity", "n_clicks"),
+)
+def toggle_identity_edit(n_clicks):
+    """Locked by default so an inferred value can't be changed by a stray click."""
+    editing = bool(n_clicks) and n_clicks % 2 == 1
+    return (not editing), (not editing), ("Done" if editing else "Edit")
+
+
+@callback(
+    Output("div-identity-status", "children"),
+    Input("input-animal", "value"),
+    Input("input-session", "value"),
+    State("store-neural-path", "data"),
+    prevent_initial_call=True,
+)
+def save_identity_edits(animal, label, neural_path):
+    """Persist edits beside the .pl2, and canonicalize what was typed.
+
+    Canonicalizing on save rather than on keystroke lets you type naturally; the
+    field is rewritten to the stored form on the next load. Without a .pl2 there is
+    nowhere to write, so the edit lasts only for this browser session — said out
+    loud rather than failing quietly.
+    """
+    animal = canonical_id(animal or "")
+    label = canonical_id(label or "", lowercase=True)
+    if not neural_path:
+        return "Not saved — a .pl2 is needed to remember this." if (animal or label) else ""
+    save_identity(neural_path, animal, label)
+    missing = [n for n, v in (("animal", animal), ("session", label)) if not v]
+    if missing:
+        return f"Saved. Still blank: {', '.join(missing)} — exports need both."
+    return "Saved."
 
 
 def _load_error(message):
@@ -778,7 +847,7 @@ def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comm
     """Silently persist the channel record whenever a rating/comment/include/exemplar/note changes.
 
     Rebuilds from the UI (which holds the complete state) and writes only when
-    something actually differs from the sidecar — so re-opening the Channel Viewer,
+    something actually differs from what's on disk — so re-opening the Channel Viewer,
     which re-fires these inputs, does not trigger a spurious write. No user-facing
     confirmation (the sink store just satisfies the callback's Output requirement).
     The animal ID is resolved on load and read-only, so it is not edited here.
@@ -820,8 +889,13 @@ def save_channel_edits(qualities, comments, includes, exemplar_idx, general_comm
 # CSV export
 # ---------------------------------------------------------------------------
 
-_NO_ANIMAL_HINT = ("No animal ID — expected it in the EthoVision header ('Mouse ID') "
-                   "or at the end of the .pl2 filename. Can't export.")
+_NO_ANIMAL_HINT = "No animal ID — fill in Animal at the top of the sidebar."
+
+# Blank session is refused rather than written as an empty column: `time` is seconds
+# into a session, so an unnamed session merges as its own nameless group and pools
+# silently with any other unnamed one. Older recordings have no Session field at all
+# (FC33-4), which is exactly when someone has to type it.
+_NO_SESSION_HINT = "No session label — fill in Session at the top of the sidebar."
 
 
 def _ask_export_path(default_name):
@@ -911,7 +985,7 @@ _ANALYSIS_HEADER_FIELDS = (
     "theta_estimator", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
-    "theta_ratio_bands_hz", "column_units",
+    "theta_ratio_bands_hz", "column_units", "session",
 )
 
 # Column names carry no units — they'd compete with the channel suffix — so the units
@@ -929,7 +1003,7 @@ def _flatten(text):
 
 def _analysis_header(session, animal, behavior_path, channel_data,
                      channel_indices, band, window, step, c, estimator=None,
-                     ratio_low_band=None, ratio_high_band=None):
+                     ratio_low_band=None, ratio_high_band=None, session_name=""):
     """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
     Everything needed to reproduce the table and to know what its `time` column
@@ -942,6 +1016,7 @@ def _analysis_header(session, animal, behavior_path, channel_data,
     """
     v = {k: "" for k in _ANALYSIS_HEADER_FIELDS}
     v["animal"] = animal or "Unknown"
+    v["session"] = session_name or ""
     v["column_units"] = _COLUMN_UNITS
 
     if session.has_neural:
@@ -1037,6 +1112,8 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     State("store-neural-path", "data"),
     State("store-behavior-path", "data"),
     State("checklist-save-channels", "value"),
+    State("input-animal", "value"),
+    State("input-session", "value"),
     State("input-theta-low", "value"),
     State("input-theta-high", "value"),
     State("input-spect-window", "value"),
@@ -1051,6 +1128,7 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
+                        animal_field, session_field,
                         theta_low, theta_high,
                         spect_window, spect_step, spect_c, spect_max_freq,
                         theta_estimator,
@@ -1074,12 +1152,16 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     channel_data = {}
     if neural_path:
         channel_data = load_channels(session.pl2_path, session)
-    # One resolver everywhere — the EthoVision header wins, the pl2 filename is
-    # the fallback. Behavior-only exports can name their animal too, which the
-    # old sidecar-only path couldn't.
-    animal = resolve_animal_id(session.pl2_path, session.behavior_metadata)
+    # The sidebar fields are authoritative — they're inference unless the user
+    # corrected them, and a correction is the only way to fix free text somebody
+    # typed into EthoVision.
+    animal = canonical_id(animal_field or "") or resolve_animal_id(
+        session.pl2_path, session.behavior_metadata)
+    session_name = canonical_id(session_field or "", lowercase=True) or         resolve_session_name(session.behavior_metadata)
     if not animal:
         return _NO_ANIMAL_HINT
+    if not session_name:
+        return _NO_SESSION_HINT
 
     channels = sorted(save_channels or [])
     if neural_path and not channels:
@@ -1102,13 +1184,14 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     r_high = _ratio_band(ratio_high_lo, ratio_high_hi, DEFAULT_THETA_RATIO_HIGH_BAND)
 
     df = build_analysis_table(session, animal, channels, band, spect_params,
+                              session_name=session_name,
                               estimator=theta_estimator,
                               ratio_low_band=r_low, ratio_high_band=r_high)
     out = _write_export(
         df, out_path,
         comment=_analysis_header(session, animal, behavior_path, channel_data,
                                  channels, band, window, step, c, theta_estimator,
-                                 r_low, r_high),
+                                 r_low, r_high, session_name=session_name),
     )
     n = len(channels)
     detail = f" ({n} channel{'s' if n != 1 else ''}, {len(df):,} rows)" if n else ""
@@ -1116,7 +1199,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
 
 
 # ---------------------------------------------------------------------------
-# Behavioral data note — free-text comment on the whole recording, sidecar-persisted
+# Behavioral data note — free-text comment on the whole recording, saved to a file
 # ---------------------------------------------------------------------------
 
 @callback(
@@ -1124,7 +1207,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     Input("store-behavior-path", "data"),
 )
 def load_behavior_comment(behavior_path):
-    """Populate the behavioral comment box from its sidecar when a file loads."""
+    """Populate the behavioral comment box from its saved note when a file loads."""
     if not behavior_path:
         return ""
     return load_behavior_notes(behavior_path).get("comment", "")
@@ -1172,7 +1255,10 @@ def browse_merge_folder(n_clicks):
 
     remember_browse_dir(folder)
     entries, problems = merge.scan_folder(folder)
-    options = [{"label": f" {e['animal']} ({e['name']})", "value": str(e["path"])}
+    # Animal *and* session: the same animal legitimately appears once per session,
+    # so the animal alone no longer identifies a row in this list.
+    options = [{"label": f" {e['animal']} · {e['session']} ({e['name']})",
+                "value": str(e["path"])}
                for e in entries]
     value = [opt["value"] for opt in options]
 
@@ -1219,4 +1305,7 @@ def run_merge(n_clicks, selected_paths):
 
     df = merge.merge_tables(entries)
     out = _write_export(df, out_path, comment=merge.merged_header(entries))
-    return f"Merged {len(entries)} animals ({len(df)} rows) to {out}"
+    n_animals = len({e["animal"] for e in entries})
+    n_sessions = len({e["session"] for e in entries})
+    return (f"Merged {len(entries)} exports — {n_animals} animal(s) across "
+            f"{n_sessions} session(s), {len(df):,} rows — to {out}")
