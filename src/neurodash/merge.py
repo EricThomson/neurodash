@@ -46,13 +46,29 @@ FIELD_LABELS = {
 
 ANALYSIS_GLOB = "*_analysis.csv"
 
+# Theta columns as written before channels moved into column names: bare, with the
+# channel named only in the header. Their presence identifies a superseded export.
+_UNSUFFIXED_THETA = ("theta_peak_hz", "theta_power_db", "theta_ratio")
+
+# Theta columns briefly carried their units *and* the suffix ("theta_peak_hz_AI17").
+# Prefix-matched so those files are caught too — they'd otherwise concat alongside
+# today's "theta_peak_AI17" as a second, half-empty column for the same variable.
+_LEGACY_PREFIXES = ("theta_peak_hz_", "theta_power_db_")
+
+
+def _is_superseded_layout(df):
+    """True if this export predates the current theta column names."""
+    return (any(c in df.columns for c in _UNSUFFIXED_THETA)
+            or any(str(c).startswith(_LEGACY_PREFIXES) for c in df.columns))
+
 
 def _compare_value(field, value):
     """The part of a header value that has to match, ignoring per-animal detail.
 
-    ``time_base`` is written as "spectral bins, step 0.1s (window 1.5s, c=10) on AI17"
-    — the parameters *and* the analysis channel. The channel is expected to differ
-    (each animal has its own exemplar), so only the text before " on " is compared.
+    ``time_base`` reads "spectral bins, step 0.1s (window 1.5s, c=10)". Older exports
+    append " on AI17" — one analysis channel per file, expected to differ per animal —
+    so anything from " on " onward is dropped before comparing. Channels now live in
+    the table's own ``channel`` column instead, and the suffix is no longer written.
     """
     value = (value or "").strip()
     if field == "time_base":
@@ -104,6 +120,14 @@ def scan_folder(folder):
         if "animal" not in df.columns or "time" not in df.columns:
             problems.append(f"{path.name}: not a neurodash analysis export "
                             f"(no animal/time columns)")
+            continue
+        if _is_superseded_layout(df):
+            # Concatenating one of these with a current export would leave two
+            # columns meaning the same thing, each half NaN, and the older one not
+            # even saying which channel it came from. Name it instead.
+            problems.append(f"{path.name}: exported before the current theta column "
+                            f"names (expected theta_peak_<channel>) — "
+                            f"re-export it from the Session Viewer")
             continue
         entries.append({
             "path": path,
@@ -168,8 +192,10 @@ def check_compatible(entries):
         if len(files) > 1:
             reasons.append(
                 f"Animal {animal} appears in {len(files)} files: {', '.join(files)}.\n"
-                f"    Each animal may appear once — one row per animal per time bin.\n"
-                f"    Fix: untick all but one of them."
+                f"    Each animal may appear once — one row per animal per time bin,\n"
+                f"    and one export already carries every channel you ticked to save.\n"
+                f"    Fix: untick all but one, re-exporting with all the channels you\n"
+                f"    want if they're split across files."
             )
     return reasons
 
@@ -190,6 +216,11 @@ def merge_tables(entries):
 
     Column order is ``time, animal, <the rest as exported>``; rows are sorted by
     time then animal, so each time bin's animals sit together.
+
+    Animals that saved different channels contribute different theta columns, so
+    the concat leaves NaN where an animal didn't save that channel. That is the
+    known cost of channels-as-columns; it vanishes when the same channels are
+    saved across animals.
     """
     frames = [entry["df"] for entry in entries]
     merged = pd.concat(frames, ignore_index=True)

@@ -69,7 +69,10 @@ def _cached_load_behavior(behavior_path_str):
     return metadata, data
 
 
-@lru_cache(maxsize=8)
+# maxsize covers a full 8-channel analysis export plus the channel on screen. At 8
+# an export exactly filled the cache and evicted the displayed channel, so the
+# Session Viewer figure recomputed from cold right after every export. ~2.3 MB each.
+@lru_cache(maxsize=16)
 def compute_spectrogram(
     pl2_path_str,
     analog_signal_index,
@@ -126,7 +129,7 @@ def _clamp_band(band, theta_band, label):
     return (low, high) if high > low else (float(theta_band[0]), float(theta_band[1]))
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)   # same reason as compute_spectrogram: an 8-channel export
 def compute_theta_channels(
     pl2_path_str,
     analog_signal_index,

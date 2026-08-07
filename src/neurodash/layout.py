@@ -52,6 +52,9 @@ _SECTION_HEADER = {
 
 _META_STYLE = {"marginTop": "6px", "fontSize": "0.85em", "color": "#555"}
 
+_CHANNEL_COL_HEADER = {"fontSize": "0.8em", "fontWeight": "bold", "color": "#555",
+                       "marginBottom": "2px"}
+
 
 # ---------------------------------------------------------------------------
 # Left sidebar — data loading & metadata
@@ -69,11 +72,26 @@ def _left_sidebar():
                     html.Button("Load neural data", id="btn-browse-neural", n_clicks=0),
                     html.Div(id="div-neural-filename", style={"marginTop": "6px"}),
                     html.Div(id="div-neural-metadata", style=_META_STYLE),
-                    dcc.Dropdown(
-                        id="dropdown-channels",
-                        multi=True,
-                        placeholder="Select LFP channels...",
-                        style={"marginTop": "6px"},
+                    # Show and Save are deliberately independent: you rarely want
+                    # to *look* at eight LFP traces, but you always want to keep
+                    # the data. Two plain checklists side by side rather than one
+                    # table of cells — each lays its own rows out identically, so
+                    # they line up for free.
+                    html.Div(
+                        [
+                            html.Div(
+                                [html.Div("Show", style=_CHANNEL_COL_HEADER),
+                                 dcc.Checklist(id="checklist-show-channels", value=[])],
+                            ),
+                            html.Div(
+                                [html.Div("Save", style=_CHANNEL_COL_HEADER),
+                                 dcc.Checklist(id="checklist-save-channels", value=[])],
+                            ),
+                        ],
+                        id="div-channel-select",
+                        style={"display": "flex", "gap": "18px", "marginTop": "6px"},
+                        title="Show = plot the raw LFP here. "
+                              "Save = include in the analysis CSV export.",
                     ),
                     dcc.Checklist(
                         id="toggle-spectrogram",

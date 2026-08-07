@@ -46,8 +46,10 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 @callback(
     Output("store-neural-path", "data"),
     Output("div-neural-filename", "children"),
-    Output("dropdown-channels", "options"),
-    Output("dropdown-channels", "value"),
+    Output("checklist-show-channels", "options"),
+    Output("checklist-show-channels", "value"),
+    Output("checklist-save-channels", "options"),
+    Output("checklist-save-channels", "value"),
     Output("dropdown-spectrogram-channel", "options"),
     Output("dropdown-spectrogram-channel", "value"),
     Input("btn-browse-neural", "n_clicks"),
@@ -56,12 +58,12 @@ def browse_neural(n_clicks):
     if not n_clicks:
         # Initial page load — autoload the default file (temporary dev convenience).
         if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_NEURAL_PATH).exists():
-            return (no_update,) * 6
+            return (no_update,) * 8
         path = AUTOLOAD_NEURAL_PATH
     else:
         path = pick_file("Select .pl2 file", "Plexon (*.pl2)", last_browse_dir())
     if not path:
-        return (no_update,) * 6
+        return (no_update,) * 8
     remember_browse_dir(path)
 
     session = load_session_from_paths(path, "")
@@ -78,8 +80,10 @@ def browse_neural(n_clicks):
         if ex is not None and 0 <= ex < sig_info["n_channels"]:
             default_channel = ex
 
-    return (path, Path(path).name, options,
-            [default_channel], options, default_channel)
+    # Save seeds from the same exemplar as Show, so changing nothing exports what
+    # it always did; the two are independent from there on.
+    return (path, Path(path).name, options, [default_channel],
+            options, [default_channel], options, default_channel)
 
 
 @callback(
@@ -372,7 +376,7 @@ def _ratio_band(low, high, default):
     Output("div-plot-placeholder", "style"),
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
-    Input("dropdown-channels", "value"),
+    Input("checklist-show-channels", "value"),
     Input("toggle-spectrogram", "value"),
     Input("dropdown-spectrogram-channel", "value"),
     Input("input-spect-window", "value"),
@@ -474,7 +478,7 @@ _last_handoff_dir = None
     State("store-neural-path", "data"),
     State("store-behavior-path", "data"),
     State("store-video-path", "data"),
-    State("dropdown-channels", "value"),
+    State("checklist-show-channels", "value"),
     State("toggle-spectrogram", "value"),
     State("dropdown-spectrogram-channel", "value"),
     State("input-spect-window", "value"),
@@ -907,8 +911,15 @@ _ANALYSIS_HEADER_FIELDS = (
     "theta_estimator", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
-    "theta_ratio_bands_hz",
+    "theta_ratio_bands_hz", "column_units",
 )
+
+# Column names carry no units — they'd compete with the channel suffix — so the units
+# live here instead. theta_power especially: dB with an arbitrary offset (amplifier
+# gain), so only differences mean anything and it is not an absolute level.
+_COLUMN_UNITS = ("time s; theta_peak Hz; theta_power dB (arbitrary offset — only "
+                 "differences are meaningful); theta_ratio unitless (-1..1); "
+                 "velocity cm/s; mobility %; x,y cm")
 
 
 def _flatten(text):
@@ -917,7 +928,7 @@ def _flatten(text):
 
 
 def _analysis_header(session, animal, behavior_path, channel_data,
-                     channel_index, band, window, step, c, estimator=None,
+                     channel_indices, band, window, step, c, estimator=None,
                      ratio_low_band=None, ratio_high_band=None):
     """Header block for the analysis CSV — a fixed set of rows, always in this order.
 
@@ -931,12 +942,14 @@ def _analysis_header(session, animal, behavior_path, channel_data,
     """
     v = {k: "" for k in _ANALYSIS_HEADER_FIELDS}
     v["animal"] = animal or "Unknown"
+    v["column_units"] = _COLUMN_UNITS
 
     if session.has_neural:
-        label = session.analog_signal_summaries[0]["channel_labels"][channel_index]
+        all_labels = session.analog_signal_summaries[0]["channel_labels"]
+        labels = [all_labels[i] for i in channel_indices]
         if session.pl2_path:
             v["neural_source"] = Path(session.pl2_path).name
-        v["spectrogram_channel"] = label
+        v["spectrogram_channel"] = ", ".join(labels)
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
         v["theta_estimator"] = estimator or ""
         # Both sub-bands on one row — the ratio is a contrast, so a band is
@@ -945,12 +958,20 @@ def _analysis_header(session, animal, behavior_path, channel_data,
         r_high = tuple(ratio_high_band or DEFAULT_THETA_RATIO_HIGH_BAND)
         v["theta_ratio_bands_hz"] = (f"low {r_low[0]}-{r_low[1]}, "
                                      f"high {r_high[0]}-{r_high[1]}")
-        v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c}) on {label}"
-        # Only the spectrogram channel's own note belongs here — every neural column in
-        # this table comes from that one channel. The general neural comment belongs to
-        # the Channel Viewer export (_channel_header), which spans all saved channels.
-        entry = (channel_data or {}).get("channels", {}).get(str(channel_index), {})
-        v["spectrogram_channel_comment"] = _flatten(entry.get("comment"))
+        # No " on <channel>" suffix any more — the channel is a column in the table,
+        # and naming one here would be wrong with several exported. merge.py still
+        # strips the old suffix so pre-existing exports compare correctly.
+        v["time_base"] = f"spectral bins, step {step}s (window {window}s, c={c})"
+        # Each exported channel's own note, tagged by channel since there are several.
+        # The general neural comment belongs to the Channel Viewer export
+        # (_channel_header), which is a separate file for separate data.
+        entries = (channel_data or {}).get("channels", {})
+        notes = []
+        for idx, label in zip(channel_indices, labels):
+            note = _flatten(entries.get(str(idx), {}).get("comment"))
+            if note:
+                notes.append(f"{label}: {note}")
+        v["spectrogram_channel_comment"] = " / ".join(notes)
     else:
         v["time_base"] = "behavior sample times (no neural data loaded)"
 
@@ -1015,7 +1036,7 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     Input("btn-download-analysis-csv", "n_clicks"),
     State("store-neural-path", "data"),
     State("store-behavior-path", "data"),
-    State("dropdown-spectrogram-channel", "value"),
+    State("checklist-save-channels", "value"),
     State("input-theta-low", "value"),
     State("input-theta-high", "value"),
     State("input-spect-window", "value"),
@@ -1029,7 +1050,7 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     State("input-theta-ratio-high-hi", "value"),
     prevent_initial_call=True,
 )
-def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
+def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
                         theta_low, theta_high,
                         spect_window, spect_step, spect_c, spect_max_freq,
                         theta_estimator,
@@ -1039,6 +1060,11 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
 
     The spectrogram bins are the grid whenever neural data is loaded; behavior is
     averaged onto them. Nothing is written in two time bases.
+
+    Which channels get theta computed comes from the **Save** column, not from what
+    is plotted or from the spectrogram channel: you rarely want to look at eight
+    traces and always want to keep the data. Each is ~1 s of cold multitaper
+    compute, so the ceiling of 8 is a few seconds.
     """
     if not neural_path and not behavior_path:
         return no_update
@@ -1055,7 +1081,10 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
     if not animal:
         return _NO_ANIMAL_HINT
 
-    ch = channel if channel is not None else 0
+    channels = sorted(save_channels or [])
+    if neural_path and not channels:
+        return ("No channels ticked to save — tick at least one in the Save column "
+                "beside the channel list.")
     band = (theta_low or DEFAULT_THETA_LOW_HZ, theta_high or DEFAULT_THETA_HIGH_HZ)
     window = spect_window or DEFAULT_SPECT_WINDOW_SEC
     step = spect_step or DEFAULT_SPECT_STEP_SEC
@@ -1072,16 +1101,18 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, channel,
     r_low = _ratio_band(ratio_low_lo, ratio_low_hi, DEFAULT_THETA_RATIO_LOW_BAND)
     r_high = _ratio_band(ratio_high_lo, ratio_high_hi, DEFAULT_THETA_RATIO_HIGH_BAND)
 
-    df = build_analysis_table(session, animal, ch, band, spect_params,
+    df = build_analysis_table(session, animal, channels, band, spect_params,
                               estimator=theta_estimator,
                               ratio_low_band=r_low, ratio_high_band=r_high)
     out = _write_export(
         df, out_path,
         comment=_analysis_header(session, animal, behavior_path, channel_data,
-                                 ch, band, window, step, c, theta_estimator,
+                                 channels, band, window, step, c, theta_estimator,
                                  r_low, r_high),
     )
-    return f"Saved to {out}"
+    n = len(channels)
+    detail = f" ({n} channel{'s' if n != 1 else ''}, {len(df):,} rows)" if n else ""
+    return f"Saved to {out}{detail}"
 
 
 # ---------------------------------------------------------------------------
