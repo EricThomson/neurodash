@@ -25,10 +25,11 @@ from pyqtgraph.Qt import QtCore
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget,
     QHBoxLayout, QVBoxLayout, QSlider, QLabel, QCheckBox, QSplitter,
-    QDoubleSpinBox, QPushButton, QComboBox, QInputDialog, QMessageBox
+    QDoubleSpinBox, QPushButton, QComboBox, QInputDialog, QMessageBox,
+    QStyle, QStyleOptionComboBox, QStylePainter
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPalette
 
 from neurodash import arena_io
 from neurodash.plot_utils import velocity_ylim
@@ -71,6 +72,52 @@ def _estimate_position_pixels(x, y, video_width, video_height):
     is why it can't be saved per arena — use the Arena pulldown for a real one.
     """
     return estimate_position_pixels(x, y, video_width, video_height)
+
+
+class ArenaComboBox(QComboBox):
+    """A combo whose thumbnails show in the drop-down list only.
+
+    The arena snapshot is worth a lot while you're choosing and nothing at all
+    afterwards — but Qt paints the current item's icon on the closed box too, and
+    sizes to it: measured 119 -> 187 px wide and 23 -> 53 px tall with a 64x48
+    icon. The height is the worse half, since it inflates the whole controls row
+    permanently for a picture you already made your decision about. So the paint
+    and the size hint both have to drop the icon, and then the popup has to be
+    widened back on its own, because it would otherwise inherit the (now narrow)
+    box width and squeeze the names against the thumbnails.
+    """
+
+    def _text_only_option(self):
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        opt.currentIcon = QIcon()
+        opt.iconSize = QSize()
+        return opt
+
+    def _widest_text(self):
+        fm = self.fontMetrics()
+        return max((fm.horizontalAdvance(self.itemText(i)) for i in range(self.count())),
+                   default=0)
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.Text))
+        opt = self._text_only_option()
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, opt)
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, opt)
+
+    def sizeHint(self):
+        return self.style().sizeFromContents(
+            QStyle.ContentsType.CT_ComboBox, self._text_only_option(),
+            QSize(self._widest_text(), self.fontMetrics().height()), self)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def showPopup(self):
+        self.view().setMinimumWidth(
+            self._widest_text() + self.iconSize().width() + 40)
+        super().showPopup()
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +260,7 @@ class NeurodashViewer(QMainWindow):
             # aren't built otherwise rather than sitting there greyed out.
             if has_behavior:
                 image_controls.addWidget(QLabel("Arena:"))
-                self.arena_combo = QComboBox()
+                self.arena_combo = ArenaComboBox()
                 self.arena_combo.setToolTip("Which saved cm-to-pixel calibration to use.")
                 self.arena_combo.setIconSize(QSize(64, 48))
                 self.arena_combo.currentIndexChanged.connect(self.on_arena_changed)
