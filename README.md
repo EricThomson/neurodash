@@ -28,7 +28,7 @@ In your cli:
     python app.py
 
 ## Roadmap
-- Handle sessions within animal.
+- add other session types
 - docs
   - basic how to use
   - Screenshots or gifs
