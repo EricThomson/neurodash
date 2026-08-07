@@ -112,6 +112,36 @@ def _is_blank(val):
 # Metadata helpers
 # ---------------------------------------------------------------------------
 
+def _user_defined(metadata, *names):
+    """Case-insensitive metadata lookup, for EthoVision *user-defined* variables.
+
+    The software-generated fields ('Arena name', 'Start time', ...) have stable
+    capitalization, but user-defined ones are spelled however the experimenter
+    typed them: the FC33-4 file says 'mouse ID' and the 2025 rat files say
+    'Mouse ID', so an exact-match lookup silently reports Unknown on one of them.
+    Aliases are tried in order.
+
+    Deliberately narrow — do not alias 'subject id' or 'arena id' here. Those are
+    real EthoVision fields carrying a useless serial number (0), so they'd shadow
+    the actual answer with a confident wrong one.
+    """
+    lowered = {str(k).strip().lower(): v for k, v in metadata.items()}
+    for name in names:
+        val = lowered.get(name.strip().lower())
+        if val is not None and str(val).strip():
+            return val
+    return None
+
+
+def get_mouse_id(metadata):
+    """Animal ID as the experimenter recorded it in the EthoVision header, or None.
+
+    This is the authoritative source — see channel_io.resolve_animal_id, which
+    prefers it over the pl2 filename so both agree.
+    """
+    return _user_defined(metadata, 'mouse id', 'animal id', 'rat id')
+
+
 def get_recording_delay(metadata):
     """Parse 'Recording after' delay from EthoVision metadata.
 
@@ -165,7 +195,7 @@ def get_display_metadata(metadata):
     video_filename = Path(video_path).name if video_path else None
 
     return {
-        'mouse_id':              metadata.get('mouse ID'),
+        'mouse_id':              get_mouse_id(metadata),
         'experiment':            metadata.get('Experiment'),
         'trial_name':            metadata.get('Trial name'),
         'start_time':            metadata.get('Start time'),

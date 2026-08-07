@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from neurodash.behavior_io import get_mouse_id
+
 SCHEMA_VERSION = 2
 
 
@@ -40,6 +42,26 @@ def parse_animal_id(pl2_path):
     return re.split(r"[\s_]+", stem)[-1] if stem else ""
 
 
+def resolve_animal_id(pl2_path, behavior_metadata=None):
+    """The animal ID, from the best source available.
+
+    The EthoVision header wins when a behavior file is loaded; the pl2 filename is
+    the fallback. One resolver so every panel and every export agrees — the two
+    disagree in practice (`multisession_ofd` has `C43-1` in the header and `c43-1`
+    in the filename), and a case mix would split one animal into two groups
+    downstream. The header is also the only source that works at all when the pl2
+    isn't named after the animal.
+
+    Still read-only in the UI and re-derived on every load, so a stale value in a
+    sidecar is ignored.
+    """
+    if behavior_metadata:
+        mouse_id = get_mouse_id(behavior_metadata)
+        if mouse_id is not None and str(mouse_id).strip():
+            return str(mouse_id).strip()
+    return parse_animal_id(pl2_path)
+
+
 def _empty_channel_entries(session):
     """Build {index_str: {label, quality, comment, include}} for every channel."""
     sig_info = session.analog_signal_summaries[0]
@@ -54,7 +76,7 @@ def default_channels(session):
     return {
         "schema_version": SCHEMA_VERSION,
         "pl2_filename": Path(session.pl2_path).name if session.pl2_path else "",
-        "animal": parse_animal_id(session.pl2_path),
+        "animal": resolve_animal_id(session.pl2_path, session.behavior_metadata),
         "comment": "",  # free-text note on the whole channel review
         "exemplar_channel_index": None,
         "channels": _empty_channel_entries(session),
@@ -93,8 +115,8 @@ def load_channels(pl2_path, session=None):
     if data is None:
         return base
 
-    # animal is read-only and always re-derived from the filename (base already
-    # holds the fresh parse); a stale saved value is intentionally ignored.
+    # animal is read-only and always re-derived (base already holds the fresh
+    # resolve); a stale saved value is intentionally ignored.
     base["comment"] = data.get("comment", "")
     base["exemplar_channel_index"] = data.get("exemplar_channel_index")
     base["updated_at"] = data.get("updated_at")

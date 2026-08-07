@@ -52,8 +52,9 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
     Output("dropdown-spectrogram-channel", "options"),
     Output("dropdown-spectrogram-channel", "value"),
     Input("btn-browse-neural", "n_clicks"),
+    State("store-behavior-path", "data"),
 )
-def browse_neural(n_clicks):
+def browse_neural(n_clicks, behavior_path):
     if not n_clicks:
         # Initial page load — autoload the default file (temporary dev convenience).
         if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_NEURAL_PATH).exists():
@@ -65,7 +66,10 @@ def browse_neural(n_clicks):
         return (no_update,) * 7
     remember_browse_dir(path)
 
-    session = load_session_from_paths(path, "")
+    # Behavior comes along so the animal ID resolves from the EthoVision header
+    # rather than the filename (resolve_animal_id); it's lru_cached, so if the
+    # Session Viewer already loaded it this is free.
+    session = load_session_from_paths(path, behavior_path or "")
     sig_info = session.analog_signal_summaries[0]
     options = [
         {"label": lbl, "value": idx}
@@ -656,10 +660,12 @@ def _spect_params(window, step, c, max_freq):
     State("input-spect-step", "value"),
     State("input-spect-c-param", "value"),
     State("input-spect-max-freq", "value"),
+    State("store-behavior-path", "data"),
     prevent_initial_call=True,
 )
 def render_channel_tab(tab_value, neural_path, view_range,
-                       spect_window, spect_step, spect_c, spect_max_freq):
+                       spect_window, spect_step, spect_c, spect_max_freq,
+                       behavior_path):
     """Build the Channel Viewer when its tab is opened *or* a new file is loaded,
     at the current window. Refreshing on file load (not just tab switch) keeps the
     comment/annotations tied to the loaded recording — no stale bleed from a
