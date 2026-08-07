@@ -28,7 +28,7 @@ In your cli:
     python app.py
 
 ## Roadmap
-- Arena calibration scaling.
+- Handle sessions within animal.
 - docs
   - basic how to use
   - Screenshots or gifs
