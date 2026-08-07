@@ -27,7 +27,8 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QVBoxLayout, QSlider, QLabel, QCheckBox, QSplitter,
     QDoubleSpinBox, QPushButton, QComboBox, QInputDialog, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtGui import QIcon
 
 from neurodash import arena_io
 from neurodash.plot_utils import velocity_ylim
@@ -214,6 +215,7 @@ class NeurodashViewer(QMainWindow):
                 image_controls.addWidget(QLabel("Arena:"))
                 self.arena_combo = QComboBox()
                 self.arena_combo.setToolTip("Which saved cm-to-pixel calibration to use.")
+                self.arena_combo.setIconSize(QSize(64, 48))
                 self.arena_combo.currentIndexChanged.connect(self.on_arena_changed)
                 image_controls.addWidget(self.arena_combo)
 
@@ -617,6 +619,15 @@ class NeurodashViewer(QMainWindow):
         self.arena_combo.addItem("Uncalibrated", None)
         for arena in arena_io.list_arenas():
             self.arena_combo.addItem(arena["name"], arena["slug"])
+            # Thumbnail on the item, full size on hover — so picking between
+            # similar-sounding arena names is a look, not a guess.
+            path = arena_io.arena_image_path(arena["slug"])
+            if arena.get("image") and path.is_file():
+                i = self.arena_combo.count() - 1
+                self.arena_combo.setItemIcon(i, QIcon(str(path)))
+                self.arena_combo.setItemData(
+                    i, f'<img src="{path.as_uri()}" width="320">',
+                    Qt.ItemDataRole.ToolTipRole)
         idx = self.arena_combo.findData(select_slug) if select_slug else 0
         self.arena_combo.setCurrentIndex(max(idx, 0))
         self.arena_combo.blockSignals(False)
@@ -771,7 +782,10 @@ class NeurodashViewer(QMainWindow):
                 self.on_calib_cancel()
                 return
 
-        arena_io.save_arena(name, calib, self.frame_w, self.frame_h)
+        # The frame you just clicked is already in memory, so the snapshot is free.
+        image = (arena_io.save_arena_image(slug, self._last_frame, self._img_levels)
+                 if self._last_frame is not None else None)
+        arena_io.save_arena(name, calib, self.frame_w, self.frame_h, image=image)
         arena_io.remember_arena(slug)
         self._end_calibration()
         self._populate_arena_combo(slug)

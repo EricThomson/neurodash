@@ -158,6 +158,38 @@ def arena_image_path(slug):
     return ARENAS_DIR / f"{slug}.png"
 
 
+def save_arena_image(slug, frame, levels=None, target_width=480):
+    """Write <slug>.png — a snapshot for recognizing the arena. Returns the filename.
+
+    One ordinary frame, animal and all: enough to answer "is this my box?", which
+    is all it's for. `levels` is the (lo, hi) display range the viewer is using —
+    pass it, because these recordings are dark enough that a raw frame saves as a
+    near-black rectangle that identifies nothing.
+
+    Shrinking is a plain integer stride (no filtering, no extra dependency), so the
+    result lands in [target_width, 2*target_width): 640 px stays 640 (~100 KB),
+    1920 goes to exactly 480. Big enough to recognize is the goal, not exact.
+
+    Best-effort: returns None if the image can't be written, since a missing
+    thumbnail must never cost you the calibration.
+    """
+    try:
+        import imageio.v3 as iio
+
+        img = np.asarray(frame, dtype=float)
+        lo, hi = levels if levels else (float(img.min()), float(img.max()))
+        img = np.clip((img - lo) / max(hi - lo, 1.0) * 255.0, 0, 255).astype(np.uint8)
+
+        step = max(1, img.shape[1] // target_width)
+        img = img[::step, ::step]
+
+        ARENAS_DIR.mkdir(parents=True, exist_ok=True)
+        iio.imwrite(arena_image_path(slug), img)
+        return f"{slug}.png"
+    except Exception:
+        return None
+
+
 def save_arena(name, calib, frame_w, frame_h, image=None, note=""):
     """Write <slug>.json. `image` is a filename in the same folder, or None.
 
