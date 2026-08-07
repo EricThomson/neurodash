@@ -898,14 +898,18 @@ _NO_ANIMAL_HINT = "No animal ID — fill in Animal at the top of the sidebar."
 _NO_SESSION_HINT = "No session label — fill in Session at the top of the sidebar."
 
 
-def _ask_export_path(default_name):
+def _ask_export_path(default_name, start_dir=None):
     """Ask the user where to save an export; "" if they cancel.
 
-    Opens in EXPORT_DIR, which is now the suggested home for exports rather than
-    the only place they can go.
+    Opens in EXPORT_DIR — the suggested home for exports, not the only place they
+    can go. Pass `start_dir` when the answer is obvious from context: the merge
+    already knows the folder you picked, and opening anywhere else is just a
+    location to navigate back out of.
     """
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    return pick_save_path("Save CSV", "CSV (*.csv)", str(EXPORT_DIR), default_name)
+    if start_dir is None:
+        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        start_dir = EXPORT_DIR
+    return pick_save_path("Save CSV", "CSV (*.csv)", str(start_dir), default_name)
 
 
 def _write_export(df, out_path, comment=""):
@@ -1174,8 +1178,12 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     spect_params = {"window": window, "step": step, "c": c,
                     "max_freq": spect_max_freq or DEFAULT_SPECT_MAX_FREQ}
 
+    # Session goes in the suggested name: one recording can legitimately be exported
+    # under several session labels, and without it the second export defaults to the
+    # first one's filename and silently overwrites it. Still ends in `_analysis.csv`,
+    # which is what merge.ANALYSIS_GLOB looks for.
     stem = Path(neural_path or behavior_path).stem
-    out_path = _ask_export_path(f"{stem}_analysis.csv")
+    out_path = _ask_export_path(f"{stem}_{session_name}_analysis.csv")
     if not out_path:
         return ""
 
@@ -1281,25 +1289,26 @@ def run_merge(n_clicks, selected_paths):
     if len(selected_paths) < 2:
         return "Tick at least two files to merge."
 
+    # merge.load_entry, not a local copy — the two definitions drifted once already.
     entries, problems = [], []
     for path in selected_paths:
-        try:
-            meta, df = merge.read_analysis_csv(path)
-        except Exception as e:
-            problems.append(f"{Path(path).name}: could not be read ({e})")
-            continue
-        entries.append({"path": Path(path), "name": Path(path).name,
-                        "animal": meta.get("animal") or str(df["animal"].iloc[0]),
-                        "meta": meta, "df": df})
+        entry, problem = merge.load_entry(path)
+        if problem:
+            problems.append(problem)
+        else:
+            entries.append(entry)
     if problems:
         return "\n".join(problems)
 
-    entries.sort(key=lambda e: e["animal"])
+    entries = merge.sort_entries(entries)
     reasons = merge.check_compatible(entries)
     if reasons:
         return merge.refusal_message(reasons)
 
-    out_path = _ask_export_path("merged_analysis.csv")
+    # Save beside the exports being merged — that's the folder just picked, and the
+    # merged table belongs with the files it came from.
+    out_path = _ask_export_path("merged_analysis.csv",
+                                start_dir=entries[0]["path"].parent)
     if not out_path:
         return ""
 

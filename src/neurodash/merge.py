@@ -104,50 +104,69 @@ def read_analysis_csv(path):
     return meta, df
 
 
+def load_entry(path):
+    """Read one export into a merge entry.
+
+    Returns ``(entry, problem)`` — exactly one is None. An entry is a dict with
+    ``path``, ``name``, ``animal``, ``session``, ``meta`` and ``df``.
+
+    The single definition of that shape, and of what disqualifies a file. Folder
+    scanning and the merge callback both go through here: they used to build the
+    dict separately, and adding ``session`` to one of them broke the other with a
+    KeyError at merge time.
+    """
+    path = Path(path)
+    try:
+        meta, df = read_analysis_csv(path)
+    except Exception as e:
+        return None, f"{path.name}: could not be read ({e})"
+
+    if "animal" not in df.columns or "time" not in df.columns:
+        return None, (f"{path.name}: not a neurodash analysis export "
+                      f"(no animal/time columns)")
+    if "session" not in df.columns:
+        # Without it there is no way to tell day 1 from day 2, and `time` is seconds
+        # *into* a session, so the rows would look like duplicates of each other.
+        return None, (f"{path.name}: exported before the session column — "
+                      f"re-export it from the Session Viewer")
+    if _is_superseded_layout(df):
+        # Concatenating one of these with a current export would leave two columns
+        # meaning the same thing, each half NaN, and the older one not even saying
+        # which channel it came from.
+        return None, (f"{path.name}: exported before the current theta column names "
+                      f"(expected theta_peak_<channel>) — "
+                      f"re-export it from the Session Viewer")
+
+    return {
+        "path": path,
+        "name": path.name,
+        "animal": meta.get("animal") or str(df["animal"].iloc[0]),
+        "session": meta.get("session") or str(df["session"].iloc[0]),
+        "meta": meta,
+        "df": df,
+    }, None
+
+
+def sort_entries(entries):
+    """Order entries by animal, then session — how the merge list reads."""
+    return sorted(entries, key=lambda e: (e["animal"], e["session"]))
+
+
 def scan_folder(folder):
     """Find analysis exports in ``folder``.
 
-    Returns ``(entries, problems)``. Each entry is a dict with ``path``, ``name``,
-    ``animal``, ``meta`` and ``df``. ``problems`` holds one message per file that
-    couldn't be read — a single corrupt file in a folder of twenty shouldn't take
+    Returns ``(entries, problems)``. ``problems`` holds one message per file that
+    couldn't be used — a single corrupt file in a folder of twenty shouldn't take
     the whole scan down, it should be named.
     """
     entries, problems = [], []
     for path in sorted(Path(folder).glob(ANALYSIS_GLOB)):
-        try:
-            meta, df = read_analysis_csv(path)
-        except Exception as e:
-            problems.append(f"{path.name}: could not be read ({e})")
-            continue
-        if "animal" not in df.columns or "time" not in df.columns:
-            problems.append(f"{path.name}: not a neurodash analysis export "
-                            f"(no animal/time columns)")
-            continue
-        if "session" not in df.columns:
-            # Without it there is no way to tell day 1 from day 2, and `time` is
-            # seconds *into* a session, so the rows would look like duplicates of
-            # each other. Refuse rather than merge something ungroupable.
-            problems.append(f"{path.name}: exported before the session column — "
-                            f"re-export it from the Session Viewer")
-            continue
-        if _is_superseded_layout(df):
-            # Concatenating one of these with a current export would leave two
-            # columns meaning the same thing, each half NaN, and the older one not
-            # even saying which channel it came from. Name it instead.
-            problems.append(f"{path.name}: exported before the current theta column "
-                            f"names (expected theta_peak_<channel>) — "
-                            f"re-export it from the Session Viewer")
-            continue
-        entries.append({
-            "path": path,
-            "name": path.name,
-            "animal": meta.get("animal") or str(df["animal"].iloc[0]),
-            "session": meta.get("session") or str(df["session"].iloc[0]),
-            "meta": meta,
-            "df": df,
-        })
-    entries.sort(key=lambda e: (e["animal"], e["session"]))
-    return entries, problems
+        entry, problem = load_entry(path)
+        if problem:
+            problems.append(problem)
+        else:
+            entries.append(entry)
+    return sort_entries(entries), problems
 
 
 def _group_by_value(entries, field):
@@ -261,12 +280,12 @@ def merge_tables(entries):
 def merged_header(entries):
     """Parameter block for the merged file — a FIXED number of rows, always.
 
-    Deliberately does not carry per-animal provenance. A line per animal would
-    make the header height vary with the animal count, which at 40 animals is a
-    40-line preamble on every file and a different shape each time. The
-    per-animal detail (source recording, analysis channel, comments) already
-    lives in the individual ``_analysis.csv`` exports, which sit alongside this
-    file — ``source_folder`` points at them.
+    Deliberately does not carry per-recording provenance — only *counts* of what
+    went in. A line per file would make the header height vary with the file count,
+    which at 40 recordings is a 40-line preamble of a different shape every time.
+    The per-recording detail (source, channels, comments) already lives in the
+    individual ``_analysis.csv`` exports, which sit alongside this file —
+    ``source_folder`` points at them.
 
     What is here is exactly what applies to *every* row: the analysis parameters,
     which check_compatible has already guaranteed are shared. Adding a field means
@@ -276,6 +295,11 @@ def merged_header(entries):
     lines = ["merged: analysis tables combined by neurodash"]
     for field in BLOCKING_FIELDS:
         lines.append(f"{field}: {_compare_value(field, first.get(field, ''))}")
-    lines.append(f"n_animals: {len(entries)}")
+    # Three counts, each of the thing it names. This was one `n_animals: len(entries)`
+    # line, which was only ever right because one file meant one animal — with an
+    # animal run across several sessions it counted files and called them animals.
+    lines.append(f"n_files: {len(entries)}")
+    lines.append(f"n_animals: {len({e['animal'] for e in entries})}")
+    lines.append(f"n_sessions: {len({e['session'] for e in entries})}")
     lines.append(f"source_folder: {entries[0]['path'].parent}")
     return "\n".join(lines)
