@@ -137,11 +137,22 @@ def load_entry(path):
                       f"(expected theta_peak_<channel>) — "
                       f"re-export it from the Session Viewer")
 
+    # The (animal, session) pairs actually present, not just the first row's. A
+    # per-animal export has exactly one pair, but a *merged* file is a legitimate
+    # input — merge each animal's sessions, then merge those — and it spans many.
+    # Reading row 0 made such a file claim to be a single hab1, which under-counted
+    # the header and blinded the duplicate check to everything past its first row.
+    pairs = {(str(a), str(s)) for a, s in zip(df["animal"], df["session"])}
+
     return {
         "path": path,
         "name": path.name,
+        # Representative values, for sorting and for labelling the merge list.
         "animal": meta.get("animal") or str(df["animal"].iloc[0]),
         "session": meta.get("session") or str(df["session"].iloc[0]),
+        "pairs": pairs,
+        "animals": sorted({a for a, _ in pairs}),
+        "sessions": sorted({s for _, s in pairs}),
         "meta": meta,
         "df": df,
     }, None
@@ -220,9 +231,16 @@ def check_compatible(entries):
     # days is the point of merging, so only a repeated animal+session pair is a real
     # duplicate — that would be two exports of one recording, and a single export
     # already carries every channel that was ticked to save.
+    #
+    # Checked against every pair a file contains, not its first row, so a merged
+    # table fed back in is caught by whatever it actually holds. Merging merges is
+    # something people will reasonably try (all of animal 1, all of animal 2, then
+    # both together); it works, and this is what keeps it honest when the two
+    # overlap.
     duplicates = {}
     for entry in entries:
-        duplicates.setdefault((entry["animal"], entry["session"]), []).append(entry["name"])
+        for pair in entry["pairs"]:
+            duplicates.setdefault(pair, []).append(entry["name"])
     for (animal, session), files in sorted(duplicates.items()):
         if len(files) > 1:
             reasons.append(
@@ -295,11 +313,12 @@ def merged_header(entries):
     lines = ["merged: analysis tables combined by neurodash"]
     for field in BLOCKING_FIELDS:
         lines.append(f"{field}: {_compare_value(field, first.get(field, ''))}")
-    # Three counts, each of the thing it names. This was one `n_animals: len(entries)`
-    # line, which was only ever right because one file meant one animal — with an
-    # animal run across several sessions it counted files and called them animals.
+    # Three counts, each of the thing it names, taken from what the tables actually
+    # contain. This was one `n_animals: len(entries)` line, right only while one file
+    # meant one animal; and counting distinct first-rows was still wrong for merged
+    # inputs, which reported a whole hab1-hab3 table as a single session.
     lines.append(f"n_files: {len(entries)}")
-    lines.append(f"n_animals: {len({e['animal'] for e in entries})}")
-    lines.append(f"n_sessions: {len({e['session'] for e in entries})}")
+    lines.append(f"n_animals: {len({a for e in entries for a in e['animals']})}")
+    lines.append(f"n_sessions: {len({s for e in entries for s in e['sessions']})}")
     lines.append(f"source_folder: {entries[0]['path'].parent}")
     return "\n".join(lines)

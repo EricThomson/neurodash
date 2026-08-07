@@ -1255,6 +1255,13 @@ def save_behavior_comment(comment, behavior_path):
     Input("btn-merge-folder", "n_clicks"),
     prevent_initial_call=True,
 )
+def _describe(values, limit=3):
+    """Short label for a file's animals or sessions — 'AAA', 'hab1+hab2', '5 items'."""
+    if not values:
+        return "?"
+    return "+".join(values) if len(values) <= limit else f"{len(values)} items"
+
+
 def browse_merge_folder(n_clicks):
     """Pick a folder and list the analysis exports in it, all ticked."""
     folder = pick_directory("Select folder of analysis exports", last_browse_dir())
@@ -1263,9 +1270,11 @@ def browse_merge_folder(n_clicks):
 
     remember_browse_dir(folder)
     entries, problems = merge.scan_folder(folder)
-    # Animal *and* session: the same animal legitimately appears once per session,
-    # so the animal alone no longer identifies a row in this list.
-    options = [{"label": f" {e['animal']} · {e['session']} ({e['name']})",
+    # Animal *and* session, and both may be plural: an already-merged table is a
+    # legitimate input, and labelling it by its first row would call a whole
+    # animal's hab1-hab3 export "hab1".
+    options = [{"label": f" {_describe(e['animals'])} · {_describe(e['sessions'])}"
+                         f" ({e['name']})",
                 "value": str(e["path"])}
                for e in entries]
     value = [opt["value"] for opt in options]
