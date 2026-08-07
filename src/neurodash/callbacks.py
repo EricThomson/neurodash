@@ -1247,6 +1247,13 @@ def save_behavior_comment(comment, behavior_path):
 # time (so unticking a file can resolve a conflict without re-scanning).
 # ---------------------------------------------------------------------------
 
+def _describe(values, limit=3):
+    """Short label for a file's animals or sessions — 'AAA', 'hab1+hab2', '5 items'."""
+    if not values:
+        return "?"
+    return "+".join(values) if len(values) <= limit else f"{len(values)} items"
+
+
 @callback(
     Output("div-merge-folder", "children"),
     Output("check-merge-files", "options"),
@@ -1255,13 +1262,6 @@ def save_behavior_comment(comment, behavior_path):
     Input("btn-merge-folder", "n_clicks"),
     prevent_initial_call=True,
 )
-def _describe(values, limit=3):
-    """Short label for a file's animals or sessions — 'AAA', 'hab1+hab2', '5 items'."""
-    if not values:
-        return "?"
-    return "+".join(values) if len(values) <= limit else f"{len(values)} items"
-
-
 def browse_merge_folder(n_clicks):
     """Pick a folder and list the analysis exports in it, all ticked."""
     folder = pick_directory("Select folder of analysis exports", last_browse_dir())
