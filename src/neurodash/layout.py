@@ -100,6 +100,24 @@ def _left_sidebar():
                         title="Session label, e.g. hab1. Inferred from the "
                               "EthoVision Session field.",
                     ),
+                    # Only shown when the .pl2 holds more than one animal. Not
+                    # behind the Edit button like the two fields above: those
+                    # protect an inferred value from a stray click, whereas this
+                    # has no inferred value to protect — until it is answered the
+                    # app offers no channels at all, so it has to stay reachable.
+                    html.Div(
+                        [
+                            html.Label("Subject", style=_IDENTITY_LABEL),
+                            dcc.Dropdown(id="dropdown-bank", options=[], value=None,
+                                         placeholder="Select…", clearable=False,
+                                         style={"flex": 1, "fontSize": "0.85em"}),
+                        ],
+                        id="div-bank-select",
+                        style={"display": "none"},
+                        title="This .pl2 holds more than one animal, on separate "
+                              "headstages. Pick this animal's channels; the other "
+                              "animal's are then never shown or exported.",
+                    ),
                     html.Button("Edit", id="btn-edit-identity", n_clicks=0,
                                 style={"marginTop": "5px", "fontSize": "0.8em"},
                                 title="Correct the animal or session label."),
@@ -590,6 +608,9 @@ def make_layout():
             dcc.Store(id="store-behavior-path", data=""),
             dcc.Store(id="store-video-path", data=""),
             dcc.Store(id="store-view-range", data=[0, DEFAULT_VIEW_DURATION]),
+            # Which subject's channels, on a .pl2 holding two animals. None means
+            # single-animal (use them all) or not chosen yet (offer none).
+            dcc.Store(id="store-bank", data=None),
             dcc.Store(id="store-channel-exemplar", data=None),
             dcc.Store(id="store-channel-saved"),  # sink for the silent annotation auto-save
             dcc.Store(id="store-behavior-saved"),  # sink for the silent behavior-note auto-save
@@ -669,10 +690,10 @@ def build_channel_view(session, channel_data, view_range=None, spect_params=None
     margins, and both divide into n equal rows, so each control block lines up
     with its channel's row in the figure.
     """
-    sig_info = session.analog_signal_summaries[0]
     exemplar = channel_data.get("exemplar_channel_index")
     channels = channel_data.get("channels", {})
-    n = len(sig_info["channel_indices"])
+    options = session.channel_options()
+    n = len(options)
 
     gutter = html.Div(
         [
@@ -681,7 +702,7 @@ def build_channel_view(session, channel_data, view_range=None, spect_params=None
                 channels.get(str(idx), {"quality": "", "comment": "", "include": True}),
                 idx == exemplar,
             )
-            for idx, label in zip(sig_info["channel_indices"], sig_info["channel_labels"])
+            for idx, label in options
         ],
         style={
             "display": "flex", "flexDirection": "column",

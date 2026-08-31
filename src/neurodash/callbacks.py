@@ -51,12 +51,10 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 @callback(
     Output("store-neural-path", "data"),
     Output("div-neural-filename", "children"),
-    Output("checklist-show-channels", "options"),
-    Output("checklist-show-channels", "value"),
-    Output("checklist-save-channels", "options"),
-    Output("checklist-save-channels", "value"),
-    Output("dropdown-spectrogram-channel", "options"),
-    Output("dropdown-spectrogram-channel", "value"),
+    Output("store-bank", "data"),
+    Output("dropdown-bank", "options"),
+    Output("dropdown-bank", "value"),
+    Output("div-bank-select", "style"),
     Input("btn-browse-neural", "n_clicks"),
 )
 def browse_neural(n_clicks):
@@ -64,32 +62,91 @@ def browse_neural(n_clicks):
         # Initial page load — reopen whatever was loaded last time, if it's still there.
         path = last_session()["neural"] if REOPEN_LAST_SESSION else None
         if not path:
-            return (no_update,) * 8
+            return (no_update,) * 6
     else:
         path = pick_file("Select .pl2 file", "Plexon (*.pl2)", last_browse_dir())
     if not path:
-        return (no_update,) * 8
+        return (no_update,) * 6
     remember_browse_dir(path)
     remember_session(neural=path)
 
+    # The channel pickers are populated by populate_channel_pickers, which also
+    # listens to store-bank — a two-animal file has no channels to offer until a
+    # subject is chosen, and that answer can change without reloading the file.
     session = load_session_from_paths(path, "")
-    sig_info = session.analog_signal_summaries[0]
-    options = [
-        {"label": lbl, "value": idx}
-        for idx, lbl in zip(sig_info["channel_indices"], sig_info["channel_labels"])
-    ]
+    banks = session.channel_banks
+    if len(banks) < 2:
+        return path, Path(path).name, None, [], None, {"display": "none"}
 
-    # Seed the default selected channel from a saved exemplar (if any).
-    default_channel = 0
+    saved_bank = load_identity(path)["bank"]
+    options = [{"label": f"{b['label']}  ({len(b['indices'])} ch)", "value": i}
+               for i, b in enumerate(banks)]
+    row_style = {"display": "flex", "alignItems": "center", "marginTop": "3px"}
+    return path, Path(path).name, saved_bank, options, saved_bank, row_style
+
+
+@callback(
+    Output("checklist-show-channels", "options"),
+    Output("checklist-show-channels", "value"),
+    Output("checklist-save-channels", "options"),
+    Output("checklist-save-channels", "value"),
+    Output("dropdown-spectrogram-channel", "options"),
+    Output("dropdown-spectrogram-channel", "value"),
+    Input("store-neural-path", "data"),
+    Input("store-bank", "data"),
+)
+def populate_channel_pickers(neural_path, bank_index):
+    """Fill the Show/Save/spectrogram channel pickers for the current subject.
+
+    Split out of browse_neural because the channel list depends on two things
+    that arrive separately: the file, and — for a .pl2 holding two animals —
+    which subject's bank was chosen. Building it once at load time would offer
+    the wrong animal's channels until the file was reloaded.
+    """
+    if not neural_path:
+        return (no_update,) * 6
+
+    session = load_session_from_paths(neural_path, "", bank_index=bank_index)
+    options = [{"label": lbl, "value": idx}
+               for idx, lbl in session.channel_options()]
+    if not options:
+        # Multi-animal file with no subject chosen — offer nothing rather than
+        # defaulting to whichever animal happens to come first.
+        return [], [], [], [], [], None
+
+    # Seed the default selected channel from a saved exemplar (if any), as long as
+    # it belongs to this subject.
+    allowed = [opt["value"] for opt in options]
+    default_channel = allowed[0]
     if EXEMPLAR_SEEDS_DEFAULT_CHANNEL:
-        ex = load_channels(path, session).get("exemplar_channel_index")
-        if ex is not None and 0 <= ex < sig_info["n_channels"]:
+        ex = load_channels(neural_path, session).get("exemplar_channel_index")
+        if ex in allowed:
             default_channel = ex
 
     # Save seeds from the same exemplar as Show, so changing nothing exports what
     # it always did; the two are independent from there on.
-    return (path, Path(path).name, options, [default_channel],
-            options, [default_channel], options, default_channel)
+    return (options, [default_channel], options, [default_channel],
+            options, default_channel)
+
+
+@callback(
+    Output("store-bank", "data", allow_duplicate=True),
+    Input("dropdown-bank", "value"),
+    State("store-neural-path", "data"),
+    prevent_initial_call=True,
+)
+def choose_bank(bank_index, neural_path):
+    """Remember which subject's channels this recording is about.
+
+    Persisted beside the .pl2 with the other identity fields, so the choice is
+    made once per file rather than on every load.
+    """
+    if not neural_path or bank_index is None:
+        return no_update
+    saved = load_identity(neural_path)
+    save_identity(neural_path, animal=saved["animal"], session=saved["session"],
+                  bank=bank_index)
+    return bank_index
 
 
 @callback(
@@ -110,17 +167,28 @@ def render_neural_metadata(neural_path, behavior_path):
         return no_update
 
     session = load_session_from_paths(neural_path, behavior_path or "")
-    sig_info = session.analog_signal_summaries[0]
+    sig_info = session.lfp_info
     dur = sig_info["duration_sec"]
     rec_dt = session.rec_datetime
     animal = resolve_animal_id(session.pl2_path, session.behavior_metadata)
+
+    # A two-animal .pl2 offers no channels until a subject is picked; say so here
+    # rather than leaving an empty picker with no explanation.
+    subject_note = ""
+    if session.is_multi_animal:
+        banks = session.channel_banks
+        if session.bank_index is None:
+            subject_note = f" — {len(banks)} animals, select a Subject above"
+        else:
+            subject_note = f" ({banks[session.bank_index]['label']})"
 
     return html.Div([
         html.Div(f"Mouse: {animal or 'Unknown'}"),
         html.Div(f"Recorded: {rec_dt.strftime('%Y-%m-%d %H:%M') if rec_dt else 'Unknown'}"),
         html.Div(f"Duration: {int(dur // 60)}m {dur % 60:.1f}s"),
         html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
-        html.Div(f"Channels: {sig_info['n_channels']}"),
+        html.Div(f"Channels: {len(session.channel_options()) or sig_info['n_channels']}"
+                 f"{subject_note}"),
     ])
 
 
@@ -183,7 +251,10 @@ def save_identity_edits(animal, label, neural_path):
     label = canonical_id(label or "", lowercase=True)
     if not neural_path:
         return "Not saved — a .pl2 is needed to remember this." if (animal or label) else ""
-    save_identity(neural_path, animal, label)
+    # Carry the subject choice across — save_identity rewrites all three fields,
+    # so omitting it here would silently un-assign the bank on a two-animal file.
+    save_identity(neural_path, animal, label,
+                  bank=load_identity(neural_path)["bank"])
     missing = [n for n, v in (("animal", animal), ("session", label)) if not v]
     if missing:
         return f"Saved. Still blank: {', '.join(missing)} — exports need both."
@@ -479,12 +550,16 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         return no_update, no_update, no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
-    channels = selected_channels or [0]
+    # No fallback to channel 0 here. An empty picker means either "nothing ticked"
+    # or, on a two-animal .pl2, "no subject chosen yet" — and channel 0 is then the
+    # *other* animal's first channel, which is exactly what must never be plotted.
+    channels = list(selected_channels or [])
     theta_toggle = theta_toggle or []
     controls = {
         "raw_channel_indices": channels,
         "show_spectrogram": "on" in (spect_toggle or []),
-        "spectrogram_channel_index": spect_channel if spect_channel is not None else 0,
+        "spectrogram_channel_index": (spect_channel if spect_channel is not None
+                                     else (channels[0] if channels else None)),
         "spect_window_sec": spect_window or DEFAULT_SPECT_WINDOW_SEC,
         "spect_step_sec": spect_step or DEFAULT_SPECT_STEP_SEC,
         "spect_c_param": spect_c or DEFAULT_SPECT_C_PARAM,
@@ -614,7 +689,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
     duration = x1 - x0
     t_center = x0 + duration / 2
-    channels = selected_channels or [0]
+    channels = list(selected_channels or [])
     show_spect = "on" in (spect_toggle or [])
     # Theta peak rides on the spectrogram in the viewer, so it only ships when the
     # heatmap does (matching the "overlay only" placement there).
@@ -625,8 +700,8 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
     has_neural = bool(neural_path)
     if has_neural:
         session = load_session_from_paths(neural_path, "")
-        sig_info = session.analog_signal_summaries[0]
-        sig = get_analog_signal(session.block, 0)
+        sig_info = session.lfp_info
+        sig = get_analog_signal(session.block, session.lfp_signal_index)
         full_duration = sig_info["duration_sec"]
         channel_labels = sig_info["channel_labels"]
 
@@ -652,7 +727,8 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
 
         # Serialize spectrogram if enabled
         if show_spect:
-            spect_ch = spect_channel if spect_channel is not None else 0
+            spect_ch = (spect_channel if spect_channel is not None
+                        else (channels[0] if channels else None))
             freqs, times, power_db = compute_spectrogram(
                 neural_path, 0, spect_ch, 0, full_duration,
                 spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
@@ -765,6 +841,11 @@ def render_channel_tab(tab_value, neural_path, behavior_path, view_range,
                 no_update, no_update, no_update)
 
     session = load_session_from_paths(neural_path, behavior_path or "")
+    if not session.channel_options():
+        return (html.Div("This .pl2 holds more than one animal — select a Subject "
+                         "in the sidebar to review its channels.",
+                         style={"color": "#999", "padding": "20px"}),
+                no_update, no_update, no_update)
     channel_data = load_channels(session.pl2_path, session)
     params = _spect_params(spect_window, spect_step, spect_c, spect_max_freq)
     return (build_channel_view(session, channel_data, view_range, params),
@@ -937,8 +1018,25 @@ def _write_export(df, out_path, comment=""):
 # NumEventChannels / NumSlowChannels, then that many per-channel records. The header
 # is variable in height but self-describing — a reader skips
 # len(_CHANNEL_HEADER_FIELDS) + n_channel_rows instead of needing a fixed size.
+def _lfp_stream_note(session):
+    """Which analog stream, and on a two-animal file which bank, an export came from.
+
+    Recorded because neither is visible in the data: a pl2 can hold two streams
+    (only one of them LFP) and two animals, so an export that doesn't say which it
+    used cannot be audited after the fact.
+    """
+    info = session.lfp_info
+    if info is None:
+        return ""
+    note = f"{info['stream_id']} ({info['stream_name']})" if info["stream_id"] else info["label"]
+    banks = session.channel_banks
+    if len(banks) > 1 and session.bank_index is not None:
+        note += f", bank {banks[session.bank_index]['label']} of {len(banks)}"
+    return note
+
+
 _CHANNEL_HEADER_FIELDS = (
-    "animal", "recorded", "source", "sampling_rate_hz", "duration_s",
+    "animal", "recorded", "source", "lfp_stream", "sampling_rate_hz", "duration_s",
     "comment", "exemplar", "n_channel_rows",
 )
 
@@ -949,7 +1047,7 @@ def _channel_header(session, channel_data, included):
     plain lines; `_write_export` adds the `#` prefixes.
     """
     channels = channel_data.get("channels", {})
-    sig_info = session.analog_signal_summaries[0]
+    sig_info = session.lfp_info
     rec = session.rec_datetime
 
     v = {k: "" for k in _CHANNEL_HEADER_FIELDS}
@@ -958,6 +1056,7 @@ def _channel_header(session, channel_data, included):
         v["recorded"] = rec.strftime("%Y-%m-%d %H:%M")
     if session.pl2_path:
         v["source"] = Path(session.pl2_path).name
+    v["lfp_stream"] = _lfp_stream_note(session)
     v["sampling_rate_hz"] = f"{sig_info['sampling_rate_hz']:.0f}"
     v["duration_s"] = f"{sig_info['duration_sec']:.1f}"
     v["comment"] = _flatten(channel_data.get("comment"))
@@ -989,7 +1088,7 @@ def _channel_header(session, channel_data, included):
 # Adding a field here changes that count: append rather than insert, and expect older
 # exports to be one row shorter.
 _ANALYSIS_HEADER_FIELDS = (
-    "animal", "neural_source", "spectrogram_channel", "theta_band_hz",
+    "animal", "neural_source", "lfp_stream", "spectrogram_channel", "theta_band_hz",
     "theta_estimator", "time_base",
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
@@ -1028,10 +1127,11 @@ def _analysis_header(session, animal, behavior_path, channel_data,
     v["column_units"] = _COLUMN_UNITS
 
     if session.has_neural:
-        all_labels = session.analog_signal_summaries[0]["channel_labels"]
+        all_labels = session.lfp_info["channel_labels"]
         labels = [all_labels[i] for i in channel_indices]
         if session.pl2_path:
             v["neural_source"] = Path(session.pl2_path).name
+        v["lfp_stream"] = _lfp_stream_note(session)
         v["spectrogram_channel"] = ", ".join(labels)
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
         v["theta_estimator"] = estimator or ""

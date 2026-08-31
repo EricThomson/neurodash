@@ -36,6 +36,24 @@ DEFAULT_SPECT_WINDOW_SEC = 1.5
 DEFAULT_SPECT_STEP_SEC = 0.1
 DEFAULT_SPECT_C_PARAM = 10
 
+# Which analog stream in a .pl2 holds the LFP, most-preferred first. A pl2 can
+# carry several; which one is the LFP depends on the rig (the lab's schema calls
+# this `setup: original or digiamp`). "FP" is Plexon's field-potential stream
+# ("FPl-Low Pass Filtered") and wins wherever it exists; "AI" is auxiliary input,
+# which is where the open-field rig put the LFP because it wrote no FP stream.
+#
+# This is not a preference so much as a correctness fix: the acquisition file has
+# both, with the real LFP in FP (10 ch) and noise in AI (32 ch) at 1/10th the
+# amplitude. Every caller used to assume analog signal 0, which is AI there.
+LFP_STREAM_PREFERENCE = ("FP", "AI")
+
+# Above this correlation, two channel "banks" (contiguous runs of channel numbers,
+# normally one per animal in a two-animal recording) are not electrically
+# independent and so are probably not separate subjects. Measured across-bank
+# correlation on the acquisition test file is 0.001 mean / 0.008 max, and
+# within-bank pairs run 0.28-0.99, so anything in between is a wide, safe gap.
+CHANNEL_BANK_INDEPENDENCE_THRESHOLD = 0.05
+
 # Channel Viewer
 CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
 CHANNEL_ROW_HEIGHT = 160  # px per channel row in the combined channel figure

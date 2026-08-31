@@ -14,9 +14,13 @@ import numpy as np
 
 from neurodash import config
 from neurodash import spectral_utils
-from neurodash.neural_io import load_pl2_block, list_analog_signal_summaries, get_analog_signal, extract_time_window
+from neurodash.neural_io import (
+    load_pl2_block, list_analog_signal_summaries, get_analog_signal,
+    extract_time_window, select_lfp_signal_index, detect_channel_banks,
+)
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import load_behavior_file
+from neurodash.channel_io import load_identity
 
 
 class Session:
@@ -27,17 +31,28 @@ class Session:
     """
 
     def __init__(self,
-                 pl2_path=None, block=None, channel_names=None,
-                 behavior_path=None, behavior_metadata=None, behavior_data=None):
+                 pl2_path=None, block=None, channel_names=None, stream_info=None,
+                 behavior_path=None, behavior_metadata=None, behavior_data=None,
+                 bank_index=None):
         # Neural
         self.pl2_path = pl2_path
         self.block = block
         self.analog_signal_summaries = (
-            list_analog_signal_summaries(block, channel_names) if block else []
+            list_analog_signal_summaries(block, channel_names, stream_info)
+            if block else []
         )
         self.rec_datetime = (
             block.annotations.get("m_CreatorDateTime", None) if block else None
         )
+        # Which analog stream is the LFP. A property of the file, not a UI choice,
+        # so it is resolved once here rather than passed around as a control.
+        self.lfp_signal_index = (
+            select_lfp_signal_index(self.analog_signal_summaries)
+            if self.analog_signal_summaries else 0
+        )
+        # Which subject's channels this session is about, when the file holds more
+        # than one animal. None means "not chosen yet" and the caller should ask.
+        self.bank_index = bank_index
 
         # Behavioral
         self.behavior_path = behavior_path
@@ -52,6 +67,55 @@ class Session:
     def has_behavior(self):
         return self.behavior_data is not None
 
+    @property
+    def lfp_info(self):
+        """Summary dict for the LFP stream — what callers used to spell ``[0]``."""
+        if not self.analog_signal_summaries:
+            return None
+        return self.analog_signal_summaries[self.lfp_signal_index]
+
+    @property
+    def channel_banks(self):
+        """Per-subject channel groups in the LFP stream (one entry when single-animal)."""
+        info = self.lfp_info
+        return detect_channel_banks(info["channel_labels"]) if info else []
+
+    @property
+    def is_multi_animal(self):
+        return len(self.channel_banks) > 1
+
+    def channel_indices(self):
+        """Channel indices this session may show or export.
+
+        The whole stream for a single-animal file; only the selected bank's
+        channels when the file holds two animals. Filtering here — rather than
+        warning after the fact — is what keeps the other animal's ephys out of the
+        channel pickers entirely, so it cannot be plotted or exported by mistake.
+
+        Returns an empty list when a multi-animal file has no bank chosen yet, so
+        the UI shows nothing rather than defaulting to somebody's data.
+        """
+        banks = self.channel_banks
+        if not banks:
+            return []
+        if len(banks) == 1:
+            return list(banks[0]["indices"])
+        if self.bank_index is None or not (0 <= self.bank_index < len(banks)):
+            return []
+        return list(banks[self.bank_index]["indices"])
+
+    def channel_options(self):
+        """(index, label) pairs for the channels this session may show or export.
+
+        The single place the UI asks "which channels exist?", so bank filtering
+        happens once and every picker inherits it.
+        """
+        info = self.lfp_info
+        if not info:
+            return []
+        labels = info["channel_labels"]
+        return [(i, labels[i]) for i in self.channel_indices()]
+
 
 # ---------------------------------------------------------------------------
 # Cached loaders — load directly from path, no copying
@@ -59,8 +123,8 @@ class Session:
 
 @lru_cache(maxsize=4)
 def _cached_load_block(pl2_path_str):
-    block, channel_names = load_pl2_block(Path(pl2_path_str))
-    return block, channel_names
+    block, channel_names, stream_info = load_pl2_block(Path(pl2_path_str))
+    return block, channel_names, stream_info
 
 
 @lru_cache(maxsize=4)
@@ -96,7 +160,7 @@ def compute_spectrogram(
 
     Keys on pl2_path_str for hashability (lru_cache requirement).
     """
-    block, _ = _cached_load_block(pl2_path_str)
+    block, _, _ = _cached_load_block(pl2_path_str)
     sig = get_analog_signal(block, analog_signal_index)
     t, y, sr = extract_time_window(sig, channel_index, start_time_sec, duration_sec)
     if bandpass_low is not None and bandpass_high is not None:
@@ -220,22 +284,30 @@ def compute_theta_channels(
 # Session loading
 # ---------------------------------------------------------------------------
 
-def load_session_from_paths(neural_path_str, behavior_path_str):
+def load_session_from_paths(neural_path_str, behavior_path_str, bank_index=None):
     """Load a Session directly from filesystem paths. No file copying.
 
     Parameters
     ----------
     neural_path_str : str — path to .pl2 file, or empty string / None
     behavior_path_str : str — path to .xlsx file, or empty string / None
+    bank_index : int or None — which subject's channels, for a pl2 holding two
+        animals. None on a single-animal file means "the only bank"; on a
+        multi-animal file it means "not chosen yet" and no channels are offered.
+        Left None, the saved choice beside the .pl2 is used — the bank is a fact
+        about the recording, like its annotations, so every caller gets the right
+        subject without having to pass it through.
 
     Returns
     -------
     Session
     """
-    block = channel_names = pl2_path = None
+    block = channel_names = stream_info = pl2_path = None
     if neural_path_str:
         pl2_path = Path(neural_path_str)
-        block, channel_names = _cached_load_block(str(pl2_path))
+        block, channel_names, stream_info = _cached_load_block(str(pl2_path))
+        if bank_index is None:
+            bank_index = load_identity(pl2_path)["bank"]
 
     behavior_metadata = behavior_data = behavior_path = None
     if behavior_path_str:
@@ -246,7 +318,9 @@ def load_session_from_paths(neural_path_str, behavior_path_str):
         pl2_path=pl2_path,
         block=block,
         channel_names=channel_names,
+        stream_info=stream_info,
         behavior_path=behavior_path,
         behavior_metadata=behavior_metadata,
         behavior_data=behavior_data,
+        bank_index=bank_index,
     )

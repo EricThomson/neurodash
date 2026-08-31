@@ -75,17 +75,17 @@ def test_session_is_canonicalized_and_optional():
 
 def test_identity_round_trip(tmp_path):
     pl2 = tmp_path / "rec.pl2"
-    assert load_identity(pl2) == {"animal": "", "session": ""}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
 
     save_identity(pl2, "  C43-1", "Hab 2")
-    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2"}
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None}
 
 
 def test_clearing_the_override_falls_back_to_inference(tmp_path):
     pl2 = tmp_path / "rec.pl2"
     save_identity(pl2, "C43-1", "hab2")
     save_identity(pl2, "", "")
-    assert load_identity(pl2) == {"animal": "", "session": ""}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
 
 
 def test_saving_channel_annotations_keeps_the_identity(tmp_path):
@@ -95,7 +95,7 @@ def test_saving_channel_annotations_keeps_the_identity(tmp_path):
     save_channels(pl2, {"pl2_filename": "rec.pl2", "comment": "a note",
                         "exemplar_channel_index": 3, "channels": {}})
 
-    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2"}
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None}
     saved = json.loads(channel_notes_path(pl2).read_text(encoding="utf-8"))
     assert saved["exemplar_channel_index"] == 3 and saved["comment"] == "a note"
 
@@ -103,10 +103,38 @@ def test_saving_channel_annotations_keeps_the_identity(tmp_path):
 def test_unreadable_notes_file_does_not_raise(tmp_path):
     pl2 = tmp_path / "rec.pl2"
     channel_notes_path(pl2).write_text("{not json", encoding="utf-8")
-    assert load_identity(pl2) == {"animal": "", "session": ""}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
 
 
 def test_identity_without_a_pl2_is_a_no_op():
     """A behavior-only session has nowhere to write; it must not raise."""
     save_identity(None, "AAA", "hab1")
-    assert load_identity(None) == {"animal": "", "session": ""}
+    assert load_identity(None) == {"animal": "", "session": "", "bank": None}
+
+
+# --- subject bank ---------------------------------------------------------
+# Which of two animals in one .pl2 this session is about. It lives with
+# animal/session because it is part of the same answer — whose recording is
+# this — and because both other writers rewrite the whole file.
+
+def test_bank_round_trips(tmp_path):
+    pl2 = tmp_path / "rec.pl2"
+    save_identity(pl2, "G20-3", "acquisition", bank=1)
+    assert load_identity(pl2) == {"animal": "G20-3", "session": "acquisition",
+                                  "bank": 1}
+
+
+def test_bank_zero_survives(tmp_path):
+    """Bank 0 is a real answer; only None means 'not chosen yet'."""
+    pl2 = tmp_path / "rec.pl2"
+    save_identity(pl2, "G16-1", "acquisition", bank=0)
+    assert load_identity(pl2)["bank"] == 0
+
+
+def test_saving_channel_annotations_keeps_the_bank(tmp_path):
+    """Rating a channel must not un-assign the subject."""
+    pl2 = tmp_path / "rec.pl2"
+    save_identity(pl2, "G20-3", "acquisition", bank=1)
+    save_channels(pl2, {"pl2_filename": "rec.pl2", "comment": "",
+                        "exemplar_channel_index": None, "channels": {}})
+    assert load_identity(pl2)["bank"] == 1

@@ -67,7 +67,11 @@ def plot_session_view(session, controls):
     """
     panels = []  # list of (label, plot_fn) to stack vertically
 
-    if session.has_neural:
+    # Neural panels need channels to be *available*, which on a two-animal .pl2
+    # means a subject has been chosen. Not the same as "the user ticked some": an
+    # empty Show list with the spectrogram on is a normal way to work, and still
+    # draws the neural panels.
+    if session.has_neural and session.channel_indices():
         panels.append(("neural", _plot_lfp))
         if controls.get("show_spectrogram"):
             panels.append(("spectrogram", _plot_spectrogram))
@@ -225,9 +229,9 @@ def normalize_lfp_traces(ys):
 # ---------------------------------------------------------------------------
 
 def _plot_lfp(fig, row, session, controls):
-    raw_channel_indices = controls.get("raw_channel_indices") or [0]
-    sig = get_analog_signal(session.block, controls.get("analog_signal_index", 0))
-    sig_info = session.analog_signal_summaries[0]
+    raw_channel_indices = list(controls.get("raw_channel_indices") or [])
+    sig = get_analog_signal(session.block, session.lfp_signal_index)
+    sig_info = session.lfp_info
     channel_labels = sig_info["channel_labels"]
     full_duration = sig_info["duration_sec"]
 
@@ -280,7 +284,7 @@ def _plot_lfp(fig, row, session, controls):
 
 
 def _plot_spectrogram(fig, row, session, controls):
-    sig_info = session.analog_signal_summaries[0]
+    sig_info = session.lfp_info
     channel_labels = sig_info["channel_labels"]
     full_duration = sig_info["duration_sec"]
     ch = controls.get("spectrogram_channel_index", 0)
@@ -288,7 +292,7 @@ def _plot_spectrogram(fig, row, session, controls):
     try:
         freqs, times, power_db = compute_spectrogram(
             str(session.pl2_path),
-            controls.get("analog_signal_index", 0),
+            session.lfp_signal_index,
             ch,
             0,
             full_duration,
@@ -370,13 +374,13 @@ def _plot_spectrogram(fig, row, session, controls):
 
 def _theta_channels(session, controls):
     """Fetch (times, peak_hz, power_db, ratio) for the analysis channel from cache."""
-    sig_info = session.analog_signal_summaries[0]
+    sig_info = session.lfp_info
     ch = controls.get("spectrogram_channel_index", 0)
     band = controls.get("theta_band",
                         (config.DEFAULT_THETA_LOW_HZ, config.DEFAULT_THETA_HIGH_HZ))
     return compute_theta_channels(
         str(session.pl2_path),
-        controls.get("analog_signal_index", 0),
+        session.lfp_signal_index,
         ch,
         sig_info["duration_sec"],
         controls.get("spect_max_freq", config.DEFAULT_SPECT_MAX_FREQ),
@@ -628,12 +632,15 @@ def plot_channel_figure(session, view_range=None, spect_params=None):
     recording). spect_params (window/step/c/max_freq) tunes the spectrograms;
     missing keys fall back to config.DEFAULT_SPECT_*.
     """
-    sig_info = session.analog_signal_summaries[0]
-    channel_indices = sig_info["channel_indices"]
+    sig_info = session.lfp_info
+    # This animal's channels only — on a two-animal pl2 the other subject's
+    # channels are never drawn, so they can't be reviewed or starred by mistake.
+    options = session.channel_options()
+    channel_indices = [idx for idx, _ in options]
     channel_labels = sig_info["channel_labels"]
     full_duration = sig_info["duration_sec"]
     n = len(channel_indices)
-    sig = get_analog_signal(session.block, 0)
+    sig = get_analog_signal(session.block, session.lfp_signal_index)
 
     sp = spect_params or {}
     window = sp.get("window") or config.DEFAULT_SPECT_WINDOW_SEC
@@ -664,7 +671,7 @@ def plot_channel_figure(session, view_range=None, spect_params=None):
         # --- spectrogram (col 2): full recording, cached
         try:
             freqs, times, power_db = compute_spectrogram(
-                str(session.pl2_path), 0, ch, 0, full_duration,
+                str(session.pl2_path), session.lfp_signal_index, ch, 0, full_duration,
                 max_freq, window, step, c_param,
             )
             fig.add_trace(

@@ -96,28 +96,34 @@ def resolve_session_name(behavior_metadata=None):
 
 
 def load_identity(pl2_path):
-    """Saved animal/session overrides for a recording, or blanks.
+    """Saved animal/session/bank overrides for a recording, or blanks.
 
     Kept in the annotations file beside the .pl2 — it already carried `animal`, and
     the pl2 is the anchor for exports. A behavior-only session therefore can't
     persist an override; it still edits fine for the current browser session.
+
+    ``bank`` is which subject's channels this session is about, for a pl2 that
+    holds two animals (None on single-animal files, and on multi-animal files that
+    haven't been assigned yet). It belongs with animal/session because it is part
+    of the same answer: *whose* recording is this.
     """
     if not pl2_path:
-        return {"animal": "", "session": ""}
+        return {"animal": "", "session": "", "bank": None}
     path = channel_notes_path(pl2_path)
     if path.exists():
         try:
             with open(path) as f:
                 data = json.load(f)
             return {"animal": data.get("animal_override", ""),
-                    "session": data.get("session", "")}
+                    "session": data.get("session", ""),
+                    "bank": data.get("bank")}
         except (json.JSONDecodeError, OSError):
             pass
-    return {"animal": "", "session": ""}
+    return {"animal": "", "session": "", "bank": None}
 
 
-def save_identity(pl2_path, animal="", session=""):
-    """Persist animal/session overrides without disturbing the channel annotations.
+def save_identity(pl2_path, animal="", session="", bank=None):
+    """Persist animal/session/bank overrides without disturbing the annotations.
 
     Read-modify-write rather than rebuilding the record, so this can't clobber
     quality ratings or the exemplar. `animal_override` is stored separately from
@@ -135,6 +141,7 @@ def save_identity(pl2_path, animal="", session=""):
             data = {}
     data["animal_override"] = canonical_id(animal)
     data["session"] = canonical_id(session, lowercase=True)
+    data["bank"] = None if bank is None else int(bank)
     data["updated_at"] = datetime.now().isoformat(timespec="seconds")
     try:
         with open(path, "w") as f:
@@ -144,11 +151,14 @@ def save_identity(pl2_path, animal="", session=""):
 
 
 def _empty_channel_entries(session):
-    """Build {index_str: {label, quality, comment, include}} for every channel."""
-    sig_info = session.analog_signal_summaries[0]
+    """Build {index_str: {label, quality, comment, include}} for this animal's channels.
+
+    Only the session's own bank, so a two-animal pl2 never puts the other
+    animal's channels in the review grid or the export.
+    """
     return {
         str(idx): {"label": lbl, "quality": "", "comment": "", "include": True}
-        for idx, lbl in zip(sig_info["channel_indices"], sig_info["channel_labels"])
+        for idx, lbl in session.channel_options()
     }
 
 
@@ -224,6 +234,7 @@ def save_channels(pl2_path, channel_data):
     channel_data["updated_at"] = datetime.now().isoformat(timespec="seconds")
     channel_data["animal_override"] = existing["animal"]
     channel_data["session"] = existing["session"]
+    channel_data["bank"] = existing["bank"]
     with open(channel_notes_path(pl2_path), "w") as f:
         json.dump(channel_data, f, indent=2)
 

@@ -51,6 +51,8 @@ def test_no_private_helper_is_decorated():
     "browse_merge_folder",
     "run_merge",
     "export_analysis_csv",
+    "populate_channel_pickers",
+    "choose_bank",
 ])
 def test_expected_callback_is_registered(name):
     assert name in callback_function_names()

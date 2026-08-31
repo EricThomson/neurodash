@@ -126,7 +126,7 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
         channel_indices = [int(channel_indices)]
     channel_indices = list(channel_indices) or [0]
 
-    sig_info = session.analog_signal_summaries[0]
+    sig_info = session.lfp_info
     labels = sig_info["channel_labels"]
 
     # No units in column names — they'd only compete with the channel suffix for
@@ -137,7 +137,8 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
     per_channel = {"theta_peak": {}, "theta_power": {}, "theta_ratio": {}}
     for channel_index in channel_indices:
         times, peak, power, ratio = compute_theta_channels(
-            str(session.pl2_path), 0, channel_index, sig_info["duration_sec"],
+            str(session.pl2_path), session.lfp_signal_index, channel_index,
+            sig_info["duration_sec"],
             max_freq, window, step, c_param,
             band[0], band[1],
             config.DEFAULT_THETA_INTERP_STEP_HZ, config.DEFAULT_THETA_SMOOTH_WIDTH,
