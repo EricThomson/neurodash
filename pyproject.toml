@@ -38,6 +38,9 @@ dependencies = [
   "anaties",
 ]
 
+[dependency-groups]
+dev = ["pytest"]
+
 [project.urls]
 Repository = "https://github.com/EricThomson/neurodash"
 

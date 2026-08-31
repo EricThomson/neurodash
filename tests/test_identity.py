@@ -1,0 +1,112 @@
+"""Animal and session: canonical form, where the value comes from, and persistence.
+
+One resolver feeds every panel and every export. A case or whitespace mix would
+split one animal into two groups downstream, which is the whole reason these are
+canonicalized rather than passed through.
+"""
+
+import json
+
+import pytest
+
+from neurodash import channel_io
+from neurodash.channel_io import (
+    canonical_id, channel_notes_path, load_identity, parse_animal_id,
+    resolve_animal_id, resolve_session_name, save_channels, save_identity,
+)
+
+
+# --- canonical form -------------------------------------------------------
+
+@pytest.mark.parametrize("raw, expected", [
+    ("C43-1", "C43-1"),
+    ("  C43-1 ", "C43-1"),
+    ("C43 -1", "C43-1"),        # whitespace goes, case stays
+    ("", ""),
+    (None, ""),
+])
+def test_canonical_animal(raw, expected):
+    assert canonical_id(raw) == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("hab 1", "hab1"),
+    ("Hab  1", "hab1"),
+    ("HAB1", "hab1"),
+    ("hab_1", "hab_1"),         # a human's naming decision, not ours to rewrite
+])
+def test_canonical_session(raw, expected):
+    assert canonical_id(raw, lowercase=True) == expected
+
+
+# --- where the value comes from -------------------------------------------
+
+def test_metadata_beats_the_filename():
+    """They disagree in practice: header 'C43-1' vs filename 'c43-1'."""
+    pl2 = "/data/250818 dual hab1 c43-1.pl2"
+    assert parse_animal_id(pl2) == "c43-1"
+    assert resolve_animal_id(pl2, {"Mouse ID": "C43-1"}) == "C43-1"
+
+
+def test_filename_is_the_fallback():
+    assert resolve_animal_id("/data/170505_open_field_theta_FC33-4.pl2") == "FC33-4"
+    assert resolve_animal_id("/data/x.pl2", {}) == "x"
+    assert resolve_animal_id("", None) == ""
+
+
+@pytest.mark.parametrize("key", ["Mouse ID", "mouse ID", "mouse id", "Animal ID"])
+def test_animal_key_is_case_insensitive(key):
+    """It's a user-defined EthoVision variable, spelled however it was typed."""
+    assert resolve_animal_id("/data/x.pl2", {key: "C43-1"}) == "C43-1"
+
+
+def test_useless_ethovision_serials_are_not_aliased():
+    """'Subject ID'/'Arena ID' are real fields carrying 0 — they must not shadow."""
+    assert resolve_animal_id("/data/x.pl2", {"Subject ID": 0, "Arena ID": 0}) == "x"
+
+
+def test_session_is_canonicalized_and_optional():
+    assert resolve_session_name({"Session": "hab 1"}) == "hab1"
+    assert resolve_session_name({}) == ""       # FC33-4 has no Session field
+    assert resolve_session_name(None) == ""
+
+
+# --- persistence ----------------------------------------------------------
+
+def test_identity_round_trip(tmp_path):
+    pl2 = tmp_path / "rec.pl2"
+    assert load_identity(pl2) == {"animal": "", "session": ""}
+
+    save_identity(pl2, "  C43-1", "Hab 2")
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2"}
+
+
+def test_clearing_the_override_falls_back_to_inference(tmp_path):
+    pl2 = tmp_path / "rec.pl2"
+    save_identity(pl2, "C43-1", "hab2")
+    save_identity(pl2, "", "")
+    assert load_identity(pl2) == {"animal": "", "session": ""}
+
+
+def test_saving_channel_annotations_keeps_the_identity(tmp_path):
+    """save_channels rewrites the whole file — it must carry these across."""
+    pl2 = tmp_path / "rec.pl2"
+    save_identity(pl2, "C43-1", "hab2")
+    save_channels(pl2, {"pl2_filename": "rec.pl2", "comment": "a note",
+                        "exemplar_channel_index": 3, "channels": {}})
+
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2"}
+    saved = json.loads(channel_notes_path(pl2).read_text(encoding="utf-8"))
+    assert saved["exemplar_channel_index"] == 3 and saved["comment"] == "a note"
+
+
+def test_unreadable_notes_file_does_not_raise(tmp_path):
+    pl2 = tmp_path / "rec.pl2"
+    channel_notes_path(pl2).write_text("{not json", encoding="utf-8")
+    assert load_identity(pl2) == {"animal": "", "session": ""}
+
+
+def test_identity_without_a_pl2_is_a_no_op():
+    """A behavior-only session has nowhere to write; it must not raise."""
+    save_identity(None, "AAA", "hab1")
+    assert load_identity(None) == {"animal": "", "session": ""}
