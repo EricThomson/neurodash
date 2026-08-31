@@ -28,10 +28,10 @@ In your cli:
     python app.py
 
 ## Roadmap
-- add other session types
+- Add acquisition session
 - docs
   - basic how to use
   - Screenshots or gifs
   - explain back-end stuff like channels/streaming neo/plx
-- Testing, linting, etc
+- Linting?
   
