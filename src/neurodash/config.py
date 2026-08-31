@@ -5,8 +5,10 @@ from pathlib import Path
 
 APP_TITLE = "neurodash"
 
-# Default starting directory for file picker dialogs
-DEFAULT_FILE_DIR = "C:/Users/Eric/data/open_field_data"
+# Where file dialogs open before anything has been browsed — used exactly once
+# per user, after which app_state.last_browse_dir takes over. Home, because it is
+# the only folder guaranteed to exist on a machine that isn't the author's.
+DEFAULT_FILE_DIR = str(Path.home())
 LOGO_PATH = "/assets/logo/neurodash_logo_200.png"
 
 # CSV exports are written here (server-side), NOT the browser's download folder.
@@ -89,12 +91,12 @@ DEFAULT_THETA_ESTIMATOR = "bandpass"
 DEFAULT_THETA_BANDPASS_MARGIN_HZ = 0.5
 DEFAULT_THETA_BANDPASS_ORDER = 8
 
-# ---------------------------------------------------------------------------
-# TEMPORARY dev convenience: autoload these files on startup so you don't have
-# to browse for them every run. Flip AUTOLOAD_ON_STARTUP to False to disable,
-# or delete this block once neurodash is where you want it (see the autoload
-# branches in callbacks.browse_neural / browse_behavior).
-# ---------------------------------------------------------------------------
-AUTOLOAD_ON_STARTUP = True
-AUTOLOAD_NEURAL_PATH = "C:/Users/Eric/data/fear/plexon/170505_open_field_theta_FC33-4.pl2"
-AUTOLOAD_BEHAVIOR_PATH = "C:/Users/Eric/data/fear/plexon/Raw data-260129_Zhenglin_openfield_pipelinepilot-Trial 5.xlsx"
+# Reopen the files you had loaded when the app last ran (app_state.last_session).
+# This replaces a block of hardcoded author paths behind an AUTOLOAD flag: the
+# point was never those particular files, it was not re-picking two files on every
+# restart — and with debug=False forcing a relaunch for every code change, that
+# adds up. Generalizing it makes it a feature rather than a dev hack, and takes
+# the last machine-specific paths out of the repo.
+#
+# Files that have moved or been deleted are simply not reopened.
+REOPEN_LAST_SESSION = True

@@ -19,10 +19,12 @@ from neurodash.config import (
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
     DEFAULT_THETA_ESTIMATOR,
     DEFAULT_THETA_RATIO_LOW_BAND, DEFAULT_THETA_RATIO_HIGH_BAND,
-    AUTOLOAD_ON_STARTUP, AUTOLOAD_NEURAL_PATH, AUTOLOAD_BEHAVIOR_PATH,
+    REOPEN_LAST_SESSION,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
 )
-from neurodash.app_state import last_browse_dir, remember_browse_dir
+from neurodash.app_state import (
+    last_browse_dir, remember_browse_dir, last_session, remember_session,
+)
 from neurodash.file_picker import pick_file, pick_save_path, pick_directory
 from neurodash import merge
 from neurodash.behavior_io import (
@@ -59,15 +61,16 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 )
 def browse_neural(n_clicks):
     if not n_clicks:
-        # Initial page load — autoload the default file (temporary dev convenience).
-        if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_NEURAL_PATH).exists():
+        # Initial page load — reopen whatever was loaded last time, if it's still there.
+        path = last_session()["neural"] if REOPEN_LAST_SESSION else None
+        if not path:
             return (no_update,) * 8
-        path = AUTOLOAD_NEURAL_PATH
     else:
         path = pick_file("Select .pl2 file", "Plexon (*.pl2)", last_browse_dir())
     if not path:
         return (no_update,) * 8
     remember_browse_dir(path)
+    remember_session(neural=path)
 
     session = load_session_from_paths(path, "")
     sig_info = session.analog_signal_summaries[0]
@@ -202,15 +205,16 @@ def _load_error(message):
 )
 def browse_behavior(n_clicks):
     if not n_clicks:
-        # Initial page load — autoload the default file (temporary dev convenience).
-        if not AUTOLOAD_ON_STARTUP or not Path(AUTOLOAD_BEHAVIOR_PATH).exists():
+        # Initial page load — reopen whatever was loaded last time, if it's still there.
+        path = last_session()["behavior"] if REOPEN_LAST_SESSION else None
+        if not path:
             return no_update, no_update, no_update
-        path = AUTOLOAD_BEHAVIOR_PATH
     else:
         path = pick_file("Select behavior file", "Excel (*.xlsx)", last_browse_dir())
     if not path:
         return no_update, no_update, no_update
     remember_browse_dir(path)
+    remember_session(behavior=path)
 
     try:
         session = load_session_from_paths("", path)

@@ -1,16 +1,24 @@
 """Tiny persisted UI state for neurodash.
 
-Currently just the last folder the file picker browsed, so it reopens where you
-left off instead of a hardcoded default (this replaces the retired startup
-autoload). Deliberately minimal — one line in ~/.neurodash, best-effort: any I/O
-error just falls back to the configured default.
+Two things, both in ~/.neurodash, both best-effort — any I/O error falls back to
+a default rather than raising:
+
+  last_dir.txt      the folder the picker last browsed, so dialogs reopen there
+  last_session.json the files last opened, so a restart reopens them
+
+They're separate on purpose: the browsed folder also tracks the *merge* folder
+picker, which has nothing to do with the loaded session.
+
+Nothing machine-specific belongs in the repo — this is where it lives instead.
 """
 
+import json
 from pathlib import Path
 
 from neurodash import config
 
 _LAST_DIR_FILE = Path.home() / ".neurodash" / "last_dir.txt"
+_LAST_SESSION_FILE = Path.home() / ".neurodash" / "last_session.json"
 
 
 def last_browse_dir():
@@ -37,5 +45,45 @@ def remember_browse_dir(path):
         folder = path if path.is_dir() else path.parent
         _LAST_DIR_FILE.parent.mkdir(parents=True, exist_ok=True)
         _LAST_DIR_FILE.write_text(str(folder), encoding="utf-8")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Last session — the files to reopen on startup
+# ---------------------------------------------------------------------------
+
+def last_session():
+    """Files last opened, as ``{"neural": path|None, "behavior": path|None}``.
+
+    A file that no longer exists comes back as None, so a moved or deleted
+    recording just means no reopen rather than an error on startup.
+    """
+    try:
+        saved = json.loads(_LAST_SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    return {key: (saved.get(key) if saved.get(key) and Path(saved[key]).is_file() else None)
+            for key in ("neural", "behavior")}
+
+
+def remember_session(neural=None, behavior=None):
+    """Record a just-opened file. Only the arguments given are updated.
+
+    Read-modify-write because the two files are picked by separate callbacks and
+    neither knows the other's path; writing the whole record from one of them
+    would clear the other.
+    """
+    try:
+        saved = json.loads(_LAST_SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if neural:
+        saved["neural"] = str(neural)
+    if behavior:
+        saved["behavior"] = str(behavior)
+    try:
+        _LAST_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_SESSION_FILE.write_text(json.dumps(saved, indent=2), encoding="utf-8")
     except OSError:
         pass
