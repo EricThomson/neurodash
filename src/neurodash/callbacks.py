@@ -623,6 +623,7 @@ def _ratio_band(low, high, default):
     Input("input-theta-ratio-high-lo", "value"),
     Input("input-theta-ratio-high-hi", "value"),
     Input("toggle-epochs", "value"),
+    Input("toggle-ttl-pulses", "value"),
     Input("input-epoch-baseline-start", "value"),
     Input("input-epoch-baseline-pad", "value"),
     Input("input-epoch-tone-duration", "value"),
@@ -638,7 +639,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
                   peak_dot_size, theta_estimator,
                   ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
-                  epoch_toggle, baseline_start, baseline_pad, tone_duration,
+                  epoch_toggle, ttl_toggle, baseline_start, baseline_pad, tone_duration,
                   tone_pad, trace_pad, shock_duration, post_shock_delay,
                   isi_duration,
                   view_range):
@@ -675,6 +676,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
         "theta_estimator": theta_estimator or DEFAULT_THETA_ESTIMATOR,
         "show_epochs": "on" in (epoch_toggle or []),
+        "show_ttl_pulses": "on" in (ttl_toggle or []),
         "epoch_params": {
             "baseline_start": baseline_start, "baseline_pad": baseline_pad,
             "tone_duration": tone_duration, "tone_pad": tone_pad,
@@ -1391,6 +1393,14 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     State("input-theta-ratio-low-hi", "value"),
     State("input-theta-ratio-high-lo", "value"),
     State("input-theta-ratio-high-hi", "value"),
+    State("input-epoch-baseline-start", "value"),
+    State("input-epoch-baseline-pad", "value"),
+    State("input-epoch-tone-duration", "value"),
+    State("input-epoch-tone-pad", "value"),
+    State("input-epoch-trace-pad", "value"),
+    State("input-epoch-shock-duration", "value"),
+    State("input-epoch-post-shock-delay", "value"),
+    State("input-epoch-isi-duration", "value"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
@@ -1398,7 +1408,10 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
                         theta_low, theta_high,
                         spect_window, spect_step, spect_c, spect_max_freq,
                         theta_estimator,
-                        ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi):
+                        ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
+                        baseline_start, baseline_pad, tone_duration,
+                        tone_pad, trace_pad, shock_duration,
+                        post_shock_delay, isi_duration):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -1414,6 +1427,14 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
         return no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
+    # Export the windows that are on screen, not config defaults — otherwise the
+    # `epoch` column silently disagrees with the bands you tuned it against.
+    session.epoch_params = {
+        "baseline_start": baseline_start, "baseline_pad": baseline_pad,
+        "tone_duration": tone_duration, "tone_pad": tone_pad,
+        "trace_pad": trace_pad, "shock_duration": shock_duration,
+        "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
+    }
 
     channel_data = {}
     if neural_path:

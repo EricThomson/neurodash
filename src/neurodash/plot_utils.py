@@ -9,8 +9,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from neurodash import config
-from neurodash import epochs
-from neurodash.behavior_io import behavior_time
+from neurodash import alignment, epochs
+from neurodash import freezeframe_io
+from neurodash.behavior_io import behavior_time, behavior_format, FREEZEFRAME
+from neurodash.timebase import window_average
 from neurodash.neural_io import get_analog_signal, extract_time_window
 from neurodash.behavior_io import extract_position
 from neurodash.session import compute_spectrogram, compute_theta_channels
@@ -98,10 +100,15 @@ def plot_session_view(session, controls):
         # figure callback — which with debug=False shows as nothing happening.
         # Its own panels are still to come.
         columns = session.behavior_data.columns
-        if controls.get("show_motion", True) and "Velocity" in columns:
-            panels.append(("motion", _plot_motion))
-        if controls.get("show_position", True) and "X center" in columns:
-            panels.append(("position", _plot_position))
+        if behavior_format(session.behavior_data) == FREEZEFRAME:
+            # No x/y at all (the camera is side-on), so no position panel ever.
+            if controls.get("show_motion", True):
+                panels.append(("freezing", _plot_freezing))
+        else:
+            if controls.get("show_motion", True) and "Velocity" in columns:
+                panels.append(("motion", _plot_motion))
+            if controls.get("show_position", True) and "X center" in columns:
+                panels.append(("position", _plot_position))
 
     if not panels:
         return None, 0
@@ -123,13 +130,15 @@ def plot_session_view(session, controls):
         vertical_spacing=0.05,
         # The motion panel carries two different units (% and cm/s), so it needs a
         # right-hand axis; every other panel is single-axis.
-        specs=[[{"secondary_y": label == "motion"}] for label, _ in panels],
+        specs=[[{"secondary_y": label in ("motion", "freezing")}]
+               for label, _ in panels],
     )
 
     for i, (label, plot_fn) in enumerate(panels, start=1):
         plot_fn(fig, i, session, controls)
 
     _add_epoch_bands(fig, session, controls)
+    _add_ttl_pulses(fig, session, controls)
 
     # Link all x-axes to row 1 for shared panning/zooming.
     # Using matches rather than shared_xaxes=True avoids a plotly rendering
@@ -163,6 +172,43 @@ def plot_session_view(session, controls):
     return fig, content_px
 
 
+def _add_ttl_pulses(fig, session, controls):
+    """Every TTL onset in the file, as a black line on the behavior clock.
+
+    Deliberately raw. The epoch and event bands are TTLs *plus* assumed durations
+    plus an inferred clock offset, so they can sit somewhere plausible while an
+    assumption underneath them is wrong — which is exactly what happened when the
+    offset was taken from `segment.t_start` and every band landed 33 s from its
+    shock artifact. These lines carry only the offset, so lining one up against a
+    stimulus artifact in the LFP tests the alignment and nothing else.
+
+    Every non-empty channel is drawn and named, not just the ones interpreted as
+    tone and shock, so a wrong channel assignment is visible too.
+    """
+    if not controls.get("show_ttl_pulses", config.DEFAULT_SHOW_TTL_PULSES):
+        return
+    if not session.events:
+        return
+    anchor = alignment.behavior_start_in_pl2(
+        session.events, session.behavior_metadata, session.segment)
+    offset = session.neural_time_offset
+    xref, yref = _axis_refs(fig, 1)
+    for name, times in sorted(session.events.items()):
+        for pl2_time in np.asarray(times, dtype=float):
+            # Without a behavior file there is no anchor, so fall back to sample
+            # time — the same axis the LFP is on, which is what matters here.
+            x = (float(pl2_time) - anchor if anchor is not None
+                 else float(pl2_time) - (session.segment[0] if session.segment else 0.0) + offset)
+            fig.add_vline(x=x, line=dict(color=config.TTL_LINE_COLOR, width=1),
+                          row="all", col=1)
+            fig.add_annotation(
+                x=x, y=0.5, xref=xref, yref=f"{yref} domain",
+                text=name, showarrow=False, textangle=-90,
+                font=dict(size=8, color=config.TTL_LINE_COLOR),
+                bgcolor="rgba(255,255,255,0.7)", borderpad=1,
+            )
+
+
 def _add_epoch_bands(fig, session, controls):
     """Shade the trial structure across every panel.
 
@@ -191,17 +237,39 @@ def _add_epoch_bands(fig, session, controls):
         times = behavior_time(session.behavior_data)
         end = float(times[-1]) if len(times) else None
 
+    xref, yref = _axis_refs(fig, 1)
     for band in epochs.build_epochs(trial["tones"], trial["shocks"], params, end):
+        colour = config.EPOCH_COLORS.get(band["kind"], "grey")
         fig.add_vrect(x0=band["start"], x1=band["end"],
-                      fillcolor=config.EPOCH_COLORS.get(band["kind"], "grey"),
-                      opacity=config.EPOCH_BAND_OPACITY,
+                      fillcolor=colour, opacity=config.EPOCH_BAND_OPACITY,
                       line_width=0, layer="below", row="all", col=1)
+        # Named in the top panel. Colour alone doesn't say which band you are
+        # looking at once the view is zoomed in past the first tone, and telling
+        # trace from isi by hue is exactly the kind of thing that hides a wrong
+        # window. Anchored to the band's midpoint so it travels with it.
+        fig.add_annotation(
+            x=0.5 * (band["start"] + band["end"]), y=1.0,
+            xref=xref, yref=f"{yref} domain",
+            text=band["label"], showarrow=False,
+            yanchor="top", font=dict(size=9, color=colour),
+            bgcolor="rgba(255,255,255,0.65)", borderpad=1,
+        )
 
     for span in epochs.event_spans(trial["tones"], trial["shocks"], params):
+        colour = config.EVENT_COLORS.get(span["kind"], "grey")
         fig.add_vrect(x0=span["start"], x1=span["end"],
-                      fillcolor=config.EVENT_COLORS.get(span["kind"], "grey"),
-                      opacity=config.EVENT_BAND_OPACITY,
+                      fillcolor=colour, opacity=config.EVENT_BAND_OPACITY,
                       line_width=0, layer="below", row="all", col=1)
+        # The shock is 2 s wide and belongs to no epoch, so it gets a name of its
+        # own or it reads as an unexplained sliver between trace and isi.
+        if span["kind"] == "shock_event":
+            fig.add_annotation(
+                x=0.5 * (span["start"] + span["end"]), y=0.0,
+                xref=xref, yref=f"{yref} domain",
+                text="shock", showarrow=False,
+                yanchor="bottom", font=dict(size=9, color=colour),
+                bgcolor="rgba(255,255,255,0.65)", borderpad=1,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +660,82 @@ def _plot_position(fig, row, session, controls):
         bgcolor="rgba(255,255,255,0.7)", borderpad=2,
     )
     fig.update_yaxes(title_text="Position (cm)", fixedrange=True, row=row, col=1)
+
+
+def _plot_freezing(fig, row, session, controls):
+    """Motion Index and freezing for a FreezeFrame session.
+
+    The fear rig's equivalent of the open-field motion panel, and laid out the
+    same way: Motion Index on the left axis raw (faint) and subsampled onto the
+    export grid (solid), so the panel stays the live check on what the export's
+    binning costs. Only the subsampled trace carries hover, for the same reason.
+
+    Freezing rides the right axis as a filled step at 0/1. Filled rather than a
+    line because what you read off it is *when* the animal was frozen, and a step
+    line makes you trace the level; and on the right axis rather than as shaded
+    background because the background already belongs to the epoch bands.
+
+    Note freezing is decoded, not thresholded — the rig applied the bout criterion
+    and freezeframe_io reconstructs its answer. See its docstring for why the
+    obvious decode undercounts by 41%.
+    """
+    data = session.behavior_data
+    t = behavior_time(data)
+    motion = data[freezeframe_io.MOTION_COLUMN].to_numpy(dtype=float)
+    frozen = freezeframe_io.freezing_state(data, session.behavior_metadata)
+
+    times = None
+    if session.has_neural:
+        try:
+            times, _peak, _power, _ratio = _theta_channels(session, controls)
+        except Exception as e:
+            print(f"ERROR getting spectral grid for freezing panel: {e}")
+    step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)
+    has_binned = times is not None
+
+    fig.add_trace(
+        go.Scattergl(x=t, y=motion, mode="lines", name="motion (raw)",
+                     line=dict(color="rgba(230,140,60,0.45)", width=0.7),
+                     hoverinfo="skip" if has_binned else None,
+                     hovertemplate=None if has_binned
+                     else "motion: %{y:.0f}<extra></extra>"),
+        row=row, col=1, secondary_y=False,
+    )
+    if has_binned:
+        mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+        fig.add_trace(
+            go.Scattergl(
+                x=times, y=window_average(t, motion, times, step),
+                mode=mode, name="motion",
+                line=dict(color="#e07800", width=1.2),
+                marker=dict(size=controls.get("theta_peak_dot_size",
+                                              config.DEFAULT_THETA_DOT_SIZE)),
+                hovertemplate="motion: %{y:.0f}<extra></extra>"),
+            row=row, col=1, secondary_y=False,
+        )
+
+    # Sampled at the bin, never averaged: a mean of a 0/1 column is a fraction,
+    # not a state, and it would blur exactly the bout edges the criterion exists
+    # to define. Bouts are >=1 s against 0.1 s bins, so nearest-sample loses
+    # nothing but the sub-bin edge.
+    if has_binned:
+        state = frozen[np.clip(np.searchsorted(t, times), 0, len(t) - 1)]
+    else:
+        state, times = frozen, t
+    fig.add_trace(
+        go.Scattergl(x=times, y=state.astype(float), mode="lines",
+                     name="freezing", line=dict(color="#2a6fb0", width=1),
+                     line_shape="hv", fill="tozeroy",
+                     fillcolor="rgba(42,111,176,0.25)",
+                     hovertemplate="freezing: %{y:.0f}<extra></extra>"),
+        row=row, col=1, secondary_y=True,
+    )
+
+    fig.update_yaxes(title_text="Motion", color="#e07800",
+                     row=row, col=1, secondary_y=False, fixedrange=True)
+    fig.update_yaxes(title_text="Freezing", color="#2a6fb0", range=[-0.05, 1.6],
+                     showticklabels=False, row=row, col=1, secondary_y=True,
+                     fixedrange=True)
 
 
 def _plot_motion(fig, row, session, controls):

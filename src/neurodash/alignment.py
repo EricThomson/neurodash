@@ -77,27 +77,53 @@ def behavior_start_in_pl2(events, behavior_metadata, segment=None):
     return None if stop is None else float(stop) - duration
 
 
-def neural_time_offset(events, behavior_metadata, segment):
+def neural_time_offset(events, behavior_metadata, segment, neural_duration=None,
+                       fragments=None, sampling_rate=1000.0):
     """Seconds to add to neural *sample* time to get behavior time.
 
-    Neural sample i sits at `i / rate` seconds from the first sample, which is
-    `t_start` on the pl2 clock; behavior time subtracts the anchor from that:
+    Both recordings are stopped together, so the END is the anchor for this as
+    well as for `behavior_start_in_pl2`. Sample 0 sits `neural_duration` before
+    the stop and behavior t=0 sits `behavior_duration` before it, so:
 
-        offset = t_start - behavior_start_in_pl2
+        offset = behavior_duration - neural_duration
+
+    On the acquisition file that is 1290.933 - 1290.117 = **+0.82 s**: the analog
+    recording started a fraction of a second after the behavior one.
+
+    **Do not use `segment.t_start` for this.** That was the first implementation
+    and it was wrong by 33 s. neo reports `t_start` 5545.324 for this file, but
+    the analog samples do not begin there — anchoring on it put the shock
+    artifacts 33 s away from the shock TTLs, which is exactly what the lab's own
+    ingestion notes warn about: "you need to subtract `Start` for everything and
+    the numbers will all work out and lock to ephys/artifacts properly in the
+    time array you build". `t_start` is not that Start.
 
     Open field has no events, so there is nothing to anchor to and the offset is
-    0 — which is exactly right there, because behavior t=0 *is* neural sample 0.
-    That is also why the app has always been correct while ignoring `t_start`:
-    sample-relative time is the right primitive, and `t_start` only matters for
-    comparing against event times, which live on the pl2 clock.
-
-    Measured on the acquisition file: t_start 5545.324 - anchor 5578.371 =
-    **-33.047 s**, i.e. the neural recording began 33 s before the behavior one.
+    0 — right there, because its two recordings were started together and
+    behavior t=0 *is* neural sample 0.
     """
     anchor = behavior_start_in_pl2(events, behavior_metadata, segment)
-    if anchor is None or segment is None:
+    duration = run_time_seconds(behavior_metadata)
+    if anchor is None or duration is None:
         return 0.0
-    return float(segment[0]) - anchor
+
+    # Preferred: place the data by where its samples actually are. neo's array is
+    # the fragments concatenated, so for the fragment holding the bulk of the
+    # recording, array index i sits at
+    #     t_start + fragment_start + (i - samples_before) / rate
+    # and the offset that turns index/rate into behavior time is the bracket:
+    if fragments and segment is not None:
+        biggest = max(range(len(fragments)), key=lambda k: fragments[k]["n_samples"])
+        before = sum(f["n_samples"] for f in fragments[:biggest]) / float(sampling_rate)
+        return (float(segment[0]) + fragments[biggest]["start_s"] - before
+                - anchor)
+
+    # Fallback when the fragment table is unreadable: both recordings stop
+    # together, so the shorter one started later. Correct only if the analog data
+    # is contiguous — on the acquisition file it lands 44 ms out because it is not.
+    if neural_duration is None:
+        return 0.0
+    return float(duration) - float(neural_duration)
 
 
 def check_alignment(events, behavior_metadata, behavior_data, segment=None):

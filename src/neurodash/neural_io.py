@@ -97,6 +97,56 @@ def segment_bounds(pl2_path):
     return (float(reader.segment_t_start(0, 0)), float(reader.segment_t_stop(0, 0)))
 
 
+def analog_fragments(pl2_path, channel_name):
+    """Contiguous runs of samples in one analog channel, in acquisition order.
+
+    A .pl2 analog channel is not necessarily one continuous recording — OmniPlex
+    writes it as *fragments*, and pausing acquisition leaves a gap between them.
+    neo concatenates the fragments into a single array, so sample index maps to
+    time only within a fragment; after a gap, every sample is reported that much
+    too early.
+
+    This is not hypothetical. The acquisition test file has two fragments —
+    113 samples, then a **33.906 s gap**, then 1,290,004 samples — so neo places
+    99.99% of the recording 33.9 s before it actually happened, which is what put
+    every LFP trace a third of a minute away from its own shock artifacts.
+
+    Returns a list of {"start_s", "n_samples"}, where start_s is seconds from the
+    start of the recording (add segment t_start for pl2 clock). Empty when the
+    fragment table can't be read, in which case callers should assume contiguity.
+    """
+    try:
+        reader = neo.io.Plexon2IO(filename=str(pl2_path))
+        reader.parse_header()
+        pl2 = reader.pl2reader
+        timestamps, counts, _values = pl2.pl2_get_analog_channel_data_by_name(
+            channel_name)
+        frequency = float(pl2.pl2_file_info.m_TimestampFrequency)
+    except Exception as e:
+        print(f"WARNING: could not read analog fragments for {channel_name}: {e}")
+        return []
+    return [{"start_s": int(ts) / frequency, "n_samples": int(n)}
+            for ts, n in zip(timestamps, counts) if int(n) > 0]
+
+
+def fragment_gap_warning(fragments, tolerance_s=1.0):
+    """Message when a channel's fragments can't be placed by one shared offset.
+
+    A single offset is exact only when all the real data sits in one fragment.
+    Two substantial fragments either side of a gap need different offsets, and
+    nothing downstream could detect the resulting misalignment, so it is said out
+    loud rather than silently mis-drawn.
+    """
+    substantial = [f for f in fragments if f["n_samples"] / 1000.0 > tolerance_s]
+    if len(substantial) < 2:
+        return ""
+    gaps = [b["start_s"] - (a["start_s"] + a["n_samples"] / 1000.0)
+            for a, b in zip(substantial, substantial[1:])]
+    return (f"This channel has {len(substantial)} separate recording fragments "
+            f"(gaps of {', '.join(f'{g:.1f}' for g in gaps)} s). Times after the "
+            f"first gap cannot be trusted — one offset cannot place them all.")
+
+
 def select_lfp_signal_index(summaries):
     """Index of the analog signal holding the LFP.
 

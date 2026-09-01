@@ -188,3 +188,41 @@ def test_no_freezing_at_all(tmp_path):
     metadata, data = load_behavior_file(path)
     assert not ff.freezing_state(data, metadata).any()
     assert ff.freezing_percentage(data, metadata) == 0.0
+
+
+# --- landing on the export grid -------------------------------------------
+# Freezing is the one behavioral column that must not be averaged. These pin the
+# difference, because a fraction and a state look alike until you group by them.
+
+def test_freezing_samples_rather_than_averages(tmp_path):
+    """A mean of a 0/1 column is a fraction, not a state.
+
+    Averaging would also blur the bout edges the rig's minimum-duration criterion
+    exists to define, which is the whole reason the column is trustworthy.
+    """
+    from neurodash.timebase import window_average
+    rows, frozen = bouts_to_rows(1200, [(100, 60), (500, 90)])
+    path, _, _ = write_csv(tmp_path, rows)
+    metadata, data = load_behavior_file(path)
+
+    t = behavior_time(data)
+    grid = np.arange(1.0, 38.0, 0.1)
+    state = ff.freezing_state(data, metadata)
+    sampled = state[np.clip(np.searchsorted(t, grid), 0, len(t) - 1)].astype(int)
+    averaged = window_average(t, state.astype(float), grid, 0.1)
+
+    assert set(np.unique(sampled)) <= {0, 1}
+    assert not set(np.unique(averaged)) <= {0, 1}   # fractions appear at bout edges
+
+
+def test_sampling_preserves_the_overall_freezing_fraction(tmp_path):
+    """Bouts are >= 1 s against 0.1 s bins, so only sub-bin edges are lost."""
+    rows, _ = bouts_to_rows(3000, [(200, 120), (900, 150), (2000, 90)])
+    path, _, _ = write_csv(tmp_path, rows)
+    metadata, data = load_behavior_file(path)
+    t = behavior_time(data)
+    grid = np.arange(t[0], t[-1], 0.1)
+    state = ff.freezing_state(data, metadata)
+    sampled = state[np.clip(np.searchsorted(t, grid), 0, len(t) - 1)]
+    assert 100 * sampled.mean() == pytest.approx(ff.freezing_percentage(data, metadata),
+                                                 abs=0.5)

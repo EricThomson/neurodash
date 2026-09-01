@@ -50,10 +50,38 @@ def test_anchor_is_the_stop_marker_minus_the_behavior_duration():
         pytest.approx(5578.371, abs=1e-3)
 
 
-def test_offset_puts_neural_sample_zero_before_behavior_zero():
-    """The Plexon recording started 33 s first, so sample 0 is negative time."""
-    assert alignment.neural_time_offset(EVENTS, METADATA, SEGMENT) == \
-        pytest.approx(-33.047, abs=1e-3)
+NEURAL_DURATION = 1290.117
+
+
+def test_offset_comes_from_the_two_durations_not_from_t_start():
+    """Both recordings stop together, so the shorter one started later.
+
+    Regression: the first implementation used neo's `segment.t_start` (5545.324)
+    as the time of neural sample 0, and was wrong by 33 s — it put the shock
+    artifacts a third of a minute away from the shock TTLs. The analog samples
+    simply do not begin at `t_start`.
+    """
+    offset = alignment.neural_time_offset(EVENTS, METADATA, SEGMENT,
+                                          NEURAL_DURATION)
+    assert offset == pytest.approx(RUN_TIME - NEURAL_DURATION, abs=1e-6)
+    assert offset == pytest.approx(0.816, abs=1e-3)
+
+
+def test_t_start_is_not_used_for_the_offset():
+    """A wildly different t_start must not change the answer."""
+    weird = (SEGMENT[0] - 5000.0, SEGMENT[1])
+    assert alignment.neural_time_offset(EVENTS, METADATA, weird, NEURAL_DURATION) == \
+        alignment.neural_time_offset(EVENTS, METADATA, SEGMENT, NEURAL_DURATION)
+
+
+def test_equal_durations_mean_no_offset():
+    assert alignment.neural_time_offset(EVENTS, METADATA, SEGMENT, RUN_TIME) == \
+        pytest.approx(0.0)
+
+
+def test_no_neural_duration_means_no_offset():
+    """A .pl2 with no analog stream has nothing to place."""
+    assert alignment.neural_time_offset(EVENTS, METADATA, SEGMENT, None) == 0.0
 
 
 def test_segment_stop_agrees_with_the_stop_marker():
@@ -69,12 +97,12 @@ def test_no_events_means_no_offset():
     This is why the app was always right while ignoring a non-zero t_start —
     sample-relative time is the correct primitive.
     """
-    assert alignment.neural_time_offset({}, None, SEGMENT) == 0.0
+    assert alignment.neural_time_offset({}, None, SEGMENT, NEURAL_DURATION) == 0.0
 
 
 def test_offset_is_zero_until_a_behavior_file_supplies_a_duration():
     """A .pl2 on its own has nothing to anchor to and stays in sample time."""
-    assert alignment.neural_time_offset(EVENTS, None, SEGMENT) == 0.0
+    assert alignment.neural_time_offset(EVENTS, None, SEGMENT, NEURAL_DURATION) == 0.0
 
 
 # --- trial structure ------------------------------------------------------

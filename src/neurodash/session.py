@@ -18,7 +18,7 @@ from neurodash import alignment
 from neurodash.neural_io import (
     load_pl2_block, list_analog_signal_summaries, get_analog_signal,
     extract_time_window, select_lfp_signal_index, detect_channel_banks,
-    load_events, segment_bounds,
+    load_events, segment_bounds, analog_fragments, fragment_gap_warning,
 )
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import load_behavior_file
@@ -58,6 +58,9 @@ class Session:
         # TTL events and the segment's pl2-clock bounds, for aligning to behavior.
         self.events = events or {}
         self.segment = segment
+        # Epoch buffer overrides from the sidebar, so an export uses the same
+        # windows that are drawn on screen. None means config defaults.
+        self.epoch_params = None
 
         # Behavioral
         self.behavior_path = behavior_path
@@ -116,10 +119,33 @@ class Session:
         0 for open field, where the two recordings were started together, and 0
         for a .pl2 loaded on its own — there is nothing to align to yet, so the
         neural axis stays in sample time until a behavior file gives it an anchor.
-        -33.047 on the acquisition test file.
+        +0.816 on the acquisition test file.
         """
-        return alignment.neural_time_offset(self.events, self.behavior_metadata,
-                                            self.segment)
+        info = self.lfp_info
+        if info is None:
+            return 0.0
+        return alignment.neural_time_offset(
+            self.events, self.behavior_metadata, self.segment,
+            info["duration_sec"], self.analog_fragments,
+            info["sampling_rate_hz"])
+
+    @property
+    def analog_fragments(self):
+        """Contiguous sample runs in the LFP stream — see neural_io.analog_fragments.
+
+        Needed because neo concatenates them, so a gap silently shifts every
+        later sample. Read from the first channel of the stream; fragments are a
+        property of the acquisition, so all channels share them.
+        """
+        info = self.lfp_info
+        if not self.pl2_path or info is None or not info["channel_labels"]:
+            return []
+        return _cached_load_fragments(str(self.pl2_path), info["channel_labels"][0])
+
+    @property
+    def fragment_warning(self):
+        """Message when one offset cannot place all this channel's samples."""
+        return fragment_gap_warning(self.analog_fragments)
 
     @property
     def trial_events(self):
@@ -188,6 +214,12 @@ def _cached_load_events(pl2_path_str):
     """TTL events and segment bounds — a cheap header read, cached like the block."""
     path = Path(pl2_path_str)
     return load_events(path), segment_bounds(path)
+
+
+@lru_cache(maxsize=4)
+def _cached_load_fragments(pl2_path_str, channel_name):
+    """Fragment table for one channel. Cached: reading it pulls the whole signal."""
+    return tuple(analog_fragments(Path(pl2_path_str), channel_name))
 
 
 @lru_cache(maxsize=4)

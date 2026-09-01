@@ -10,7 +10,9 @@ import numpy as np
 import pandas as pd
 
 from neurodash import config
-from neurodash.behavior_io import behavior_time, extract_position
+from neurodash import epochs, freezeframe_io
+from neurodash.behavior_io import (
+    behavior_time, extract_position, behavior_format, FREEZEFRAME)
 from neurodash.session import compute_theta_channels
 from neurodash.timebase import window_average
 
@@ -43,10 +45,8 @@ def _behavior_columns(session, times, step):
         return {}
 
     data = session.behavior_data
-    # EthoVision-shaped columns. A FreezeFrame session has no position or velocity
-    # at all, so it contributes no behavioral columns yet rather than raising.
-    if "X center" not in data.columns or "Velocity" not in data.columns:
-        return {}
+    if behavior_format(data) == FREEZEFRAME:
+        return _freezeframe_columns(session, times, step)
     t_behav, x, y = extract_position(data, point="center")
     velocity = data["Velocity"].to_numpy(dtype=float)
     mobility = (data["Mobility"].to_numpy(dtype=float) if "Mobility" in data.columns
@@ -60,6 +60,48 @@ def _behavior_columns(session, times, step):
         "x": window_average(t_behav, x, times, step),
         "y": window_average(t_behav, y, times, step),
     }
+
+
+def _freezeframe_columns(session, times, step):
+    """Behavioral columns for a fear-conditioning session.
+
+    `motion` averages onto the grid like velocity does. `freezing` must not:
+    averaging a 0/1 state gives a fraction, not a state, and it blurs exactly the
+    bout edges the rig's minimum-duration criterion exists to define. Bouts are
+    >= 1 s against 0.1 s bins, so sampling the state at each bin loses only the
+    sub-bin edge.
+
+    `epoch` is a label, so it lands by interval containment. Blank is a real value
+    meaning a bin no epoch covers — the guard bands are deliberate, and roughly a
+    third of the session falls in them. `tone` and `shock` are the stimuli
+    themselves as 0/1, which is what the notebooks exported alongside the epoch.
+    """
+    data = session.behavior_data
+    t_behav = behavior_time(data)
+    motion = data[freezeframe_io.MOTION_COLUMN].to_numpy(dtype=float)
+    frozen = freezeframe_io.freezing_state(data, session.behavior_metadata)
+
+    if times is None:
+        columns = {"motion": motion, "freezing": frozen.astype(int)}
+        grid = t_behav
+    else:
+        nearest = np.clip(np.searchsorted(t_behav, times), 0, len(t_behav) - 1)
+        columns = {
+            "motion": window_average(t_behav, motion, times, step),
+            "freezing": frozen[nearest].astype(int),
+        }
+        grid = times
+
+    trial = session.trial_events
+    if trial["tones"] is not None:
+        params = session.epoch_params
+        built = epochs.build_epochs(trial["tones"], trial["shocks"], params,
+                                    float(t_behav[-1]) if len(t_behav) else None)
+        spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
+        columns["epoch"] = epochs.epoch_labels(grid, built)
+        columns["tone"] = epochs.event_mask(grid, spans, "tone_event")
+        columns["shock"] = epochs.event_mask(grid, spans, "shock_event")
+    return columns
 
 
 def build_analysis_table(session, animal, channel_indices, band, spect_params,

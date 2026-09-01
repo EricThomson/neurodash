@@ -22,6 +22,7 @@ from neurodash.config import (
     CHANNEL_ROW_HEIGHT,
     ACQUISITION_EPOCH_PARAMS,
     DEFAULT_SHOW_EPOCHS,
+    DEFAULT_SHOW_TTL_PULSES,
 )
 from neurodash.plot_utils import plot_channel_figure
 
@@ -530,6 +531,12 @@ def _right_sidebar():
                     ),
                     # Claims about the animal. Changing these changes what is
                     # being measured, so they are grouped apart from the hedges.
+                    dcc.Checklist(
+                        id="toggle-ttl-pulses",
+                        options=[{"label": " Show TTL pulses", "value": "on"}],
+                        value=["on"] if DEFAULT_SHOW_TTL_PULSES else [],
+                        style={"fontSize": "0.85em", "marginBottom": "6px"},
+                    ),
                     html.Div("Design windows", style=_EPOCH_GROUP_HEADER,
                              title="These are statements about the animal, not "
                                    "the equipment — changing them changes what "

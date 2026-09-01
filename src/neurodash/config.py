@@ -107,6 +107,16 @@ ACQUISITION_EPOCH_PARAMS = {
 # session and full-saturation fills would bury the LFP; the gaps between bands
 # are the guard periods and are meant to read as gaps.
 DEFAULT_SHOW_EPOCHS = True
+
+# Raw TTL onsets as black lines. A diagnostic rather than a display: the epoch and
+# event bands are built from the TTLs *plus* assumed durations and an inferred
+# clock offset, so they can look plausible while resting on a wrong assumption.
+# The pulses themselves carry none of that — they are what the file says, on the
+# behavior clock — which makes them the thing to check an artifact against. On by
+# default while acquisition support is being built, since the alignment is the
+# thing most worth watching; turn it off once the bands are trusted.
+DEFAULT_SHOW_TTL_PULSES = True
+TTL_LINE_COLOR = "black"
 EPOCH_COLORS = {"baseline": "orangered", "tone": "blue",
                 "trace": "fuchsia", "isi": "lime"}
 EPOCH_BAND_OPACITY = 0.10
