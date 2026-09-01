@@ -727,6 +727,55 @@ _viewer_process = None
 _last_handoff_dir = None
 
 
+def _trial_payload(neural_path, behavior_path):
+    """Tone/shock onsets and epoch windows for the viewer, or None.
+
+    None for any session without TTLs, which is every open-field recording — the
+    viewer then draws no overlay and shows no toggle for it.
+    """
+    if not neural_path or not behavior_path:
+        return None
+    session = load_session_from_paths(neural_path, behavior_path)
+    trial = session.trial_events
+    if trial["tones"] is None:
+        return None
+    times = behavior_time(session.behavior_data) if session.has_behavior else None
+    end = float(times[-1]) if times is not None and len(times) else None
+    built = epochs.build_epochs(trial["tones"], trial["shocks"],
+                                session.epoch_params, end)
+    return {
+        "tones": [float(x) for x in trial["tones"]],
+        "shocks": ([float(x) for x in trial["shocks"]]
+                   if trial["shocks"] is not None else []),
+        "epochs": [{"label": e["label"], "kind": e["kind"],
+                    "start": float(e["start"]), "end": float(e["end"])}
+                   for e in built],
+    }
+
+
+def _find_freezeframe_video(metadata, behavior_dir):
+    """The video beside a FreezeFrame CSV, matched on its Experiment id.
+
+    FreezeFrame records no video path at all, so there is nothing to look up —
+    but it names the experiment (`VF021126_104816`) and the rig names the video
+    for it (`VF021126_104816 Box 2.wmv`). Matching the prefix in the behavior
+    file's own directory is the same rule the EthoVision path already follows:
+    never trust a recorded path from the experimenter's machine, find the file by
+    name where the behavior file actually lives.
+
+    Returns None when nothing matches, which falls through to the file dialog.
+    """
+    experiment = (metadata or {}).get("Experiment")
+    if not experiment or not behavior_dir.is_dir():
+        return None
+    stem = str(experiment).strip()
+    for suffix in (".wmv", ".avi", ".mp4"):
+        matches = sorted(behavior_dir.glob(f"{stem}*{suffix}"))
+        if matches:
+            return str(matches[0])
+    return None
+
+
 @callback(
     Output("div-viewer-status", "children"),
     Output("store-video-path", "data"),
@@ -770,19 +819,22 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
     video_path = existing_video_path or None
     if not video_path:
         session = load_session_from_paths("", behavior_path)
-        info = get_display_metadata(session.behavior_metadata)
-        video_filename = info.get("video_filename")
         behavior_dir = Path(behavior_path).parent
-
-        if video_filename:
-            candidate = behavior_dir / video_filename
-            if candidate.exists():
-                video_path = str(candidate)
+        if behavior_format(session.behavior_data) == FREEZEFRAME:
+            video_path = _find_freezeframe_video(session.behavior_metadata,
+                                                 behavior_dir)
+        else:
+            info = get_display_metadata(session.behavior_metadata)
+            video_filename = info.get("video_filename")
+            if video_filename:
+                candidate = behavior_dir / video_filename
+                if candidate.exists():
+                    video_path = str(candidate)
 
     if not video_path:
         video_path = pick_file(
             "Select video file",
-            "Video (*.avi *.mp4)",
+            "Video (*.avi *.mp4 *.wmv)",
             str(Path(behavior_path).parent),
         )
     if not video_path:
@@ -809,7 +861,11 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
     # Serialize LFP arrays if neural data is loaded
     has_neural = bool(neural_path)
     if has_neural:
-        session = load_session_from_paths(neural_path, "")
+        # With the behavior path, not without it: the neural/behavior offset is
+        # derived from it, and a session built neural-only reports 0 — which
+        # would put the viewer 0.86 s away from the Session Viewer on an
+        # acquisition file while looking perfectly fine.
+        session = load_session_from_paths(neural_path, behavior_path or "")
         sig_info = session.lfp_info
         sig = get_analog_signal(session.block, session.lfp_signal_index)
         full_duration = sig_info["duration_sec"]
@@ -841,11 +897,12 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
             spect_ch = (spect_channel if spect_channel is not None
                         else (channels[0] if channels else None))
             freqs, times, power_db = compute_spectrogram(
-                neural_path, 0, spect_ch, 0, full_duration,
+                neural_path, session.lfp_signal_index, spect_ch, 0, full_duration,
                 spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
                 spect_window or DEFAULT_SPECT_WINDOW_SEC,
                 spect_step or DEFAULT_SPECT_STEP_SEC,
                 spect_c or DEFAULT_SPECT_C_PARAM,
+                time_offset=session.neural_time_offset,
             )
             spect_ch_name = channel_labels[spect_ch]
             np.savez(
@@ -857,7 +914,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
             # usually free) and handed over as a plain array — the viewer only draws it.
             if show_theta_peak:
                 theta_times, theta_peak, _theta_power, _theta_ratio = compute_theta_channels(
-                    neural_path, 0, spect_ch, full_duration,
+                    neural_path, session.lfp_signal_index, spect_ch, full_duration,
                     spect_max_freq or DEFAULT_SPECT_MAX_FREQ,
                     spect_window or DEFAULT_SPECT_WINDOW_SEC,
                     spect_step or DEFAULT_SPECT_STEP_SEC,
@@ -866,6 +923,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                     DEFAULT_THETA_INTERP_STEP_HZ,
                     DEFAULT_THETA_SMOOTH_WIDTH,
                     theta_estimator,
+                    time_offset=session.neural_time_offset,
                 )
                 np.savez(
                     Path(handoff_dir) / "theta.npz",
@@ -884,6 +942,11 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         "theta_peak_color": theta_peak_color or "black",
         "t_start": t_center,
         "window_duration": duration,
+        # Trial structure, on the behavior clock. A handful of floats, and the
+        # viewer only draws them — same deal as the theta peak array. Lets you
+        # scrub straight to a trial, which is a navigation question and so
+        # belongs here; anything that needs comparing stays in the Session Viewer.
+        "trial": _trial_payload(neural_path, behavior_path),
     }
     with open(Path(handoff_dir) / "handoff.json", "w") as f:
         json.dump(handoff, f)

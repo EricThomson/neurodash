@@ -34,8 +34,11 @@ from PyQt6.QtGui import QIcon, QPalette
 from neurodash import arena_io
 from neurodash.plot_utils import velocity_ylim
 from neurodash.behavior_io import (
-    load_behavior_file, get_recording_delay, estimate_position_pixels
+    load_behavior_file, get_recording_delay, estimate_position_pixels,
+    behavior_time, behavior_format, FREEZEFRAME,
 )
+from neurodash.config import MOTION_YMAX_PERCENTILE
+from neurodash.freezeframe_io import MOTION_COLUMN, freezing_state
 
 # Spatial calibration comes from ~/.neurodash/arenas via the Arena pulldown; see
 # arena_io. The old hardcoded _SCALE_X/_OFFSET_X constants were removed: they were
@@ -59,10 +62,18 @@ _BRIGHTNESS_RANGE = 100
 # ---------------------------------------------------------------------------
 
 def _load_behavior(path):
-    """Load EthoVision Excel file. Returns (data DataFrame, recording_delay_s)."""
+    """Load a behavior file. Returns (data, metadata, recording_delay_s, format).
+
+    ``recording_delay_s`` aligns video frame 0 to behavioral sample 0. EthoVision
+    needs it because it keeps two clocks (Trial time and Recording time) and
+    states the gap as `Recording after`. FreezeFrame keeps **one** clock — `Time`
+    starts at frame 1 and matches the video 1:1 — so its delay is 0 and there is
+    no field to read.
+    """
     metadata, data = load_behavior_file(path)
-    recording_delay_s = get_recording_delay(metadata)
-    return data, recording_delay_s
+    fmt = behavior_format(data)
+    delay = 0.0 if fmt == FREEZEFRAME else get_recording_delay(metadata)
+    return data, metadata, delay, fmt
 
 
 def _estimate_position_pixels(x, y, video_width, video_height):
@@ -147,21 +158,50 @@ class NeurodashViewer(QMainWindow):
         theta_band = handoff.get("theta_band")
         t_start = handoff.get("t_start", 0.0)
         window_duration = handoff.get("window_duration", 30.0)
+        # Trial structure on the behavior clock, or None for a session with no
+        # TTLs (every open-field recording). Drawn, never computed here — same
+        # arrangement as the theta peak array.
+        self.trial = handoff.get("trial")
 
         has_video = bool(video_path)
         has_behavior = behavior_path is not None
 
         # --- Load behavioral data ---
+        # Which behavioral variables exist is a property of the rig, so it is
+        # asked once here and every panel keys off it. FreezeFrame has no x/y at
+        # all (side-on camera), so no position plot, no dot on the video and no
+        # arena calibration — none of those have anything to work from.
+        self.has_position = False
+        self.motion = None
+        self.freezing = None
+        # The position-dependent widgets are only built when there are tracked
+        # coordinates, so default them here — otherwise a session with video but
+        # no x/y (FreezeFrame) reaches the arena setup with them undefined.
+        self.arena_combo = None
+        self.calib_row = None
+        self.calib_marks = None
+        self._behav_plots = []
+        self._behav_cursors = []
         if has_behavior:
             print("Loading behavioral data...")
-            behavior, recording_delay_s = _load_behavior(behavior_path)
-            self.t_behav = behavior["Recording time"].to_numpy(dtype=float)
-            self.x_cm = behavior["X center"].to_numpy(dtype=float)
-            self.y_cm = behavior["Y center"].to_numpy(dtype=float)
-            # Velocity, raw at the EthoVision rate. The viewer deliberately shows only
-            # the raw trace — the raw-vs-subsampled comparison is a QC question that
-            # lives in the Dash Session Viewer, not something you ask while scrubbing video.
-            self.velocity = behavior["Velocity"].to_numpy(dtype=float)
+            behavior, beh_meta, recording_delay_s, beh_format = _load_behavior(behavior_path)
+            self.t_behav = behavior_time(behavior)
+            if beh_format == FREEZEFRAME:
+                # Raw at the video rate, like velocity below: the raw-vs-binned
+                # comparison is a QC question for the Session Viewer. Freezing is
+                # a different variable rather than a second view of motion, and
+                # it is the one people are actually looking for, so it gets a
+                # panel of its own.
+                self.motion = behavior[MOTION_COLUMN].to_numpy(dtype=float)
+                self.freezing = freezing_state(behavior, beh_meta).astype(float)
+            else:
+                self.has_position = True
+                self.x_cm = behavior["X center"].to_numpy(dtype=float)
+                self.y_cm = behavior["Y center"].to_numpy(dtype=float)
+                # Velocity, raw at the EthoVision rate. The viewer deliberately shows only
+                # the raw trace — the raw-vs-subsampled comparison is a QC question that
+                # lives in the Dash Session Viewer, not something you ask while scrubbing video.
+                self.velocity = behavior["Velocity"].to_numpy(dtype=float)
         else:
             recording_delay_s = 0.0
 
@@ -221,7 +261,7 @@ class NeurodashViewer(QMainWindow):
             # there's video; the cm->pixel map only makes sense with behavior.
             first_frame = self._read_video_frame(self.frame_offset)
             self.frame_h, self.frame_w = first_frame.shape[:2]
-            if has_behavior:
+            if self.has_position:
                 self.px, self.py = _estimate_position_pixels(self.x_cm, self.y_cm, self.frame_w, self.frame_h)
 
         # --- Build UI ---
@@ -255,10 +295,12 @@ class NeurodashViewer(QMainWindow):
             image_controls = QHBoxLayout()
             image_controls.setContentsMargins(0, 0, 0, 0)
 
-            # Arena calibration. Only meaningful with behavior loaded — there's
-            # nothing to map without tracked positions — so the controls simply
-            # aren't built otherwise rather than sitting there greyed out.
-            if has_behavior:
+            # Arena calibration. Only meaningful with tracked positions — there's
+            # nothing to map without them — so the controls simply aren't built
+            # otherwise rather than sitting there greyed out. Note a FreezeFrame
+            # session *has* a behavior file but no x/y (side-on camera), so this
+            # keys off has_position, not has_behavior.
+            if self.has_position:
                 image_controls.addWidget(QLabel("Arena:"))
                 self.arena_combo = ArenaComboBox()
                 self.arena_combo.setToolTip("Which saved cm-to-pixel calibration to use.")
@@ -309,7 +351,7 @@ class NeurodashViewer(QMainWindow):
 
             # Calibration prompt row — hidden until Calibrate is pressed, so the
             # instructions are in front of you exactly when they apply.
-            if has_behavior:
+            if self.has_position:
                 self.calib_row = QWidget()
                 calib_layout = QHBoxLayout(self.calib_row)
                 calib_layout.setContentsMargins(0, 0, 0, 0)
@@ -332,7 +374,7 @@ class NeurodashViewer(QMainWindow):
             self.dot = pg.ScatterPlotItem(size=12, pen=pg.mkPen(None), brush=pg.mkBrush(255, 50, 50, 220))
             self.image_view.getView().addItem(self.dot)
 
-            if has_behavior:
+            if self.has_position:
                 # Green crosses mark the points collected so far.
                 self.calib_marks = pg.ScatterPlotItem(
                     size=14, symbol="crosshair", pen=pg.mkPen("w", width=1),
@@ -351,6 +393,39 @@ class NeurodashViewer(QMainWindow):
             self.top_splitter.addWidget(behav_panel)
             self.top_splitter.setSizes([650, 550])
 
+            self._behav_plots = []
+            if not self.has_position:
+                # FreezeFrame: motion and freezing, two panels in the slot the
+                # open-field position/velocity pair occupies. Two rather than one
+                # dual-axis panel because freezing is the variable people come
+                # here to read, and sharing an axis with motion buries it.
+                self.motion_plot = pg.PlotWidget(title="Motion Index")
+                self.motion_plot.plot(self.t_behav, self.motion,
+                                      pen=pg.mkPen("y", width=1))
+                self.motion_plot.setYRange(
+                    0, float(np.nanpercentile(self.motion, MOTION_YMAX_PERCENTILE)),
+                    padding=0.05)
+                self.motion_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
+                self.motion_plot.addItem(self.motion_cursor)
+                behav_layout.addWidget(self.motion_plot)
+
+                self.freeze_plot = pg.PlotWidget(title="Freezing")
+                # Step, not a line: the value is a state, and interpolating
+                # between 0 and 1 draws ramps where there are none.
+                self.freeze_plot.plot(self.t_behav, self.freezing,
+                                      pen=pg.mkPen((80, 160, 230), width=1),
+                                      stepMode="right", fillLevel=0,
+                                      brush=pg.mkBrush(80, 160, 230, 70))
+                self.freeze_plot.setYRange(-0.05, 1.05, padding=0)
+                self.freeze_plot.getAxis("left").setTicks([[(0, "0"), (1, "1")]])
+                self.freeze_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
+                self.freeze_plot.addItem(self.freeze_cursor)
+                behav_layout.addWidget(self.freeze_plot)
+
+                self._behav_plots = [self.motion_plot, self.freeze_plot]
+                self._behav_cursors = [self.motion_cursor, self.freeze_cursor]
+
+        if has_behavior and self.has_position:
             pos_ymin = np.nanpercentile(np.concatenate([self.x_cm, self.y_cm]), 10)
             pos_ymax = np.nanpercentile(np.concatenate([self.x_cm, self.y_cm]), 90)
             _, vel_ymax = velocity_ylim(self.velocity)
@@ -370,6 +445,9 @@ class NeurodashViewer(QMainWindow):
             self.vel_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
             self.vel_plot.addItem(self.vel_cursor)
             behav_layout.addWidget(self.vel_plot)
+
+            self._behav_plots = [self.pos_plot, self.vel_plot]
+            self._behav_cursors = [self.pos_cursor, self.vel_cursor]
 
         # Slider controls — three stacked rows:
         #   1) time label   2) play + 2× + scrub slider   3) window + zoom
@@ -417,6 +495,15 @@ class NeurodashViewer(QMainWindow):
         self.zoom_checkbox.setChecked(True)
         self.zoom_checkbox.stateChanged.connect(self.on_zoom_mode_changed)
         controls_layout.addWidget(self.zoom_checkbox)
+
+        self.events_checkbox = None
+        if self.trial:
+            self.events_checkbox = QCheckBox("Events")
+            self.events_checkbox.setChecked(True)
+            self.events_checkbox.setToolTip(
+                "Shade the epoch windows and mark shock onsets.")
+            self.events_checkbox.stateChanged.connect(self.on_events_toggled)
+            controls_layout.addWidget(self.events_checkbox)
         controls_layout.addStretch(1)
         slider_layout.addLayout(controls_layout)
 
@@ -512,11 +599,13 @@ class NeurodashViewer(QMainWindow):
         # Collect all time-series plots for range updates
         self._time_plots = []
         if has_behavior:
-            self._time_plots += [self.pos_plot, self.vel_plot]
+            self._time_plots += self._behav_plots
         if has_neural:
             self._time_plots.append(self.lfp_plot)
         if show_spectrogram:
             self._time_plots.append(self.spec_plot)
+
+        self._build_event_overlay()
 
         for plot in self._time_plots:
             plot.enableAutoRange(x=False, y=False)
@@ -868,11 +957,12 @@ class NeurodashViewer(QMainWindow):
             t = self.t_behav[min(behavior_idx, len(self.t_behav) - 1)]
             # Hidden mid-calibration: showing the mapping you're replacing would
             # bias where you click.
-            if self._has_video and self.dot is not None and self._calib is None:
+            if (self._has_video and self.dot is not None and self._calib is None
+                    and self.has_position):
                 idx = min(behavior_idx, len(self.px) - 1)
                 self.dot.setData([self.px[idx]], [self.py[idx]])
-            self.pos_cursor.setValue(t)
-            self.vel_cursor.setValue(t)
+            for cursor in self._behav_cursors:
+                cursor.setValue(t)
         else:
             t = behavior_idx / self.fps
 
@@ -894,6 +984,47 @@ class NeurodashViewer(QMainWindow):
     def on_window_duration_changed(self):
         if self.zoom_checkbox.isChecked():
             self.show_frame(self.slider.value())
+
+    def _build_event_overlay(self):
+        """Shade epochs and mark shock onsets on every time plot.
+
+        Overlays on the plots that already exist rather than adding a panel —
+        the same choice the theta peak made, and for the same reason: the viewer
+        is for navigating, so the trial structure has to be readable *against*
+        the signals rather than beside them.
+
+        Built once and shown/hidden by the toggle. Rebuilding per frame would put
+        ~90 scene items into the playback path, which the frame budget has no
+        room for.
+        """
+        self._event_items = []
+        if not self.trial or not self._time_plots:
+            return
+        colours = {"baseline": (255, 69, 0), "tone": (60, 90, 255),
+                   "trace": (255, 0, 255), "isi": (50, 205, 50)}
+        for plot in self._time_plots:
+            for band in self.trial.get("epochs", []):
+                region = pg.LinearRegionItem(
+                    values=(band["start"], band["end"]), movable=False,
+                    brush=pg.mkBrush(*colours.get(band["kind"], (128, 128, 128)), 38))
+                region.setZValue(-100)          # behind the traces
+                for line in region.lines:       # edges are noise at this density
+                    line.setPen(pg.mkPen(None))
+                plot.addItem(region)
+                self._event_items.append(region)
+            # The shock has no epoch of its own — it sits in the guard gap
+            # between trace and isi — so without a line it would be invisible.
+            for onset in self.trial.get("shocks", []):
+                line = pg.InfiniteLine(angle=90, pos=onset,
+                                       pen=pg.mkPen((255, 0, 255), width=1))
+                line.setZValue(-50)
+                plot.addItem(line)
+                self._event_items.append(line)
+
+    def on_events_toggled(self):
+        show = self.events_checkbox.isChecked()
+        for item in self._event_items:
+            item.setVisible(show)
 
     def on_zoom_mode_changed(self):
         if not self.zoom_checkbox.isChecked():
