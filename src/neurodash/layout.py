@@ -20,6 +20,8 @@ from neurodash.config import (
     LOGO_PATH,
     CHANNEL_QUALITY_OPTIONS,
     CHANNEL_ROW_HEIGHT,
+    ACQUISITION_EPOCH_PARAMS,
+    DEFAULT_SHOW_EPOCHS,
 )
 from neurodash.plot_utils import plot_channel_figure
 
@@ -124,8 +126,9 @@ def _left_sidebar():
                         title="This .pl2 holds more than one animal, on separate "
                               "headstages. Pick this animal's channel group; the "
                               "other animal's are then never shown or exported. "
-                              "Names are read from the filename in order and are a "
-                              "guess — check them against the behavior file.",
+                              "Box 1 is the first channel bank, Box 2 the second — "
+                              "check your animal's box in the session notes or the "
+                              "video filename.",
                     ),
                     html.Button("Edit", id="btn-edit-identity", n_clicks=0,
                                 style={"marginTop": "5px", "fontSize": "0.8em"},
@@ -249,6 +252,33 @@ def _left_sidebar():
 # ---------------------------------------------------------------------------
 # Right sidebar — display controls (collapsible)
 # ---------------------------------------------------------------------------
+
+_EPOCH_GROUP_HEADER = {"fontSize": "0.72em", "fontWeight": "bold", "color": "#888",
+                       "textTransform": "uppercase", "marginTop": "8px",
+                       "marginBottom": "2px"}
+_EPOCH_WARNING_STYLE = {"fontSize": "0.78em", "color": "#b00", "marginTop": "6px",
+                        "whiteSpace": "normal"}
+
+
+def _epoch_input(input_id, label, title, step=0.5):
+    """One labelled number box for an epoch buffer.
+
+    The id's trailing name matches the key in config.ACQUISITION_EPOCH_PARAMS, so
+    the callback can map controls to parameters without a second lookup table
+    that could drift out of step with this one.
+    """
+    key = input_id.replace("input-epoch-", "").replace("-", "_")
+    return html.Div(
+        [
+            html.Label(label, style={"fontSize": "0.78em"}),
+            dcc.Input(id=input_id, type="number",
+                      value=ACQUISITION_EPOCH_PARAMS[key],
+                      min=0, step=step, debounce=True,
+                      style={"width": "100%", "marginBottom": "4px"}),
+        ],
+        title=title,
+    )
+
 
 def _right_sidebar():
     return html.Div(
@@ -481,6 +511,63 @@ def _right_sidebar():
                     ),
                 ],
                 id="div-theta-controls",
+                style={"display": "none"},
+            ),
+
+            # --- Epoch windows (fear conditioning only; hidden when the .pl2
+            # carries no TTL events). Live controls rather than constants: the
+            # notebook values were chosen for 1 Hz behavior, and the point of
+            # putting them here is to find what is actually needed at 30 Hz with
+            # exact TTLs. See sandbox/acquisition/epoch_windows.md. ---
+            html.Div(
+                [
+                    html.Div("Epochs", style=_SECTION_HEADER),
+                    dcc.Checklist(
+                        id="toggle-epochs",
+                        options=[{"label": " Show epochs", "value": "on"}],
+                        value=["on"] if DEFAULT_SHOW_EPOCHS else [],
+                        style={"fontSize": "0.85em", "marginBottom": "6px"},
+                    ),
+                    # Claims about the animal. Changing these changes what is
+                    # being measured, so they are grouped apart from the hedges.
+                    html.Div("Design windows", style=_EPOCH_GROUP_HEADER,
+                             title="These are statements about the animal, not "
+                                   "the equipment — changing them changes what "
+                                   "you are measuring."),
+                    _epoch_input("input-epoch-baseline-start", "Baseline start (s)",
+                                 "Skip the start of the session while the animal "
+                                 "settles."),
+                    _epoch_input("input-epoch-post-shock-delay", "Post-shock delay (s)",
+                                 "How long the unconditioned response lasts. The "
+                                 "ISI window starts after this."),
+                    _epoch_input("input-epoch-isi-duration", "ISI duration (s)",
+                                 "Length of the ISI measurement window."),
+                    # Guards against clock slop. Sized for 1 Hz behavior; with
+                    # exact TTLs and 0.1 s bins these may no longer be needed.
+                    html.Div("Timing guards", style=_EPOCH_GROUP_HEADER,
+                             title="Hedges against imprecise timing. Chosen when "
+                                   "behavior was sampled at 1 Hz; may not be "
+                                   "needed now."),
+                    _epoch_input("input-epoch-baseline-pad", "Baseline pad (s)",
+                                 "Stop the baseline short of the first tone.",
+                                 step=0.05),
+                    _epoch_input("input-epoch-tone-pad", "Tone pad (s)",
+                                 "Inset both ends of each tone epoch.", step=0.05),
+                    _epoch_input("input-epoch-trace-pad", "Trace pad (s)",
+                                 "Inset both ends of each trace epoch.", step=0.05),
+                    # Protocol constants — in no file, so they have to be stated.
+                    html.Div("Protocol", style=_EPOCH_GROUP_HEADER,
+                             title="Durations no file records. The trace interval "
+                                   "is measured from the TTLs, not set here."),
+                    _epoch_input("input-epoch-tone-duration", "Tone duration (s)",
+                                 "How long the tone plays. Not recorded in the "
+                                 "pl2 — set by the protocol."),
+                    _epoch_input("input-epoch-shock-duration", "Shock duration (s)",
+                                 "How long the shock lasts. Not recorded in the "
+                                 "pl2 — set by the protocol."),
+                    html.Div(id="div-epoch-warnings", style=_EPOCH_WARNING_STYLE),
+                ],
+                id="div-epoch-controls",
                 style={"display": "none"},
             ),
         ],

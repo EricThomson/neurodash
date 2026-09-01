@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from neurodash import config
+from neurodash import epochs
+from neurodash.behavior_io import behavior_time
 from neurodash.neural_io import get_analog_signal, extract_time_window
 from neurodash.behavior_io import extract_position
 from neurodash.session import compute_spectrogram, compute_theta_channels
@@ -127,6 +129,8 @@ def plot_session_view(session, controls):
     for i, (label, plot_fn) in enumerate(panels, start=1):
         plot_fn(fig, i, session, controls)
 
+    _add_epoch_bands(fig, session, controls)
+
     # Link all x-axes to row 1 for shared panning/zooming.
     # Using matches rather than shared_xaxes=True avoids a plotly rendering
     # issue where go.Heatmap doesn't display on non-anchor shared x-axes.
@@ -157,6 +161,47 @@ def plot_session_view(session, controls):
     )
 
     return fig, content_px
+
+
+def _add_epoch_bands(fig, session, controls):
+    """Shade the trial structure across every panel.
+
+    Two layers, because they answer different questions. The **epochs**
+    (baseline/tone/trace/isi) are the analysis windows — what gets averaged — and
+    the gaps between them are the guard periods, which is why they are drawn as
+    separate bands rather than a continuous tiling. The **events** (tone, shock)
+    are what actually happened to the animal; the tone event is slightly wider
+    than the tone epoch because the epoch is inset by `tone_pad`, and the shock
+    has no epoch at all, so without this layer it would not appear.
+
+    Drawn below the traces and at low opacity: these cover most of the session,
+    and the LFP has to stay readable through them. Seeing the windows is the
+    point — a 90 s ISI band visibly stopping short of the next tone is obvious
+    where the same error buried in a saved array was not.
+    """
+    if not controls.get("show_epochs", config.DEFAULT_SHOW_EPOCHS):
+        return
+    trial = getattr(session, "trial_events", None)
+    if not trial or trial.get("tones") is None:
+        return
+
+    params = controls.get("epoch_params")
+    end = None
+    if session.has_behavior:
+        times = behavior_time(session.behavior_data)
+        end = float(times[-1]) if len(times) else None
+
+    for band in epochs.build_epochs(trial["tones"], trial["shocks"], params, end):
+        fig.add_vrect(x0=band["start"], x1=band["end"],
+                      fillcolor=config.EPOCH_COLORS.get(band["kind"], "grey"),
+                      opacity=config.EPOCH_BAND_OPACITY,
+                      line_width=0, layer="below", row="all", col=1)
+
+    for span in epochs.event_spans(trial["tones"], trial["shocks"], params):
+        fig.add_vrect(x0=span["start"], x1=span["end"],
+                      fillcolor=config.EVENT_COLORS.get(span["kind"], "grey"),
+                      opacity=config.EVENT_BAND_OPACITY,
+                      line_width=0, layer="below", row="all", col=1)
 
 
 # ---------------------------------------------------------------------------

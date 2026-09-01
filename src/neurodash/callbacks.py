@@ -26,6 +26,8 @@ from neurodash.app_state import (
     last_browse_dir, remember_browse_dir, last_session, remember_session,
 )
 from neurodash.file_picker import pick_file, pick_save_path, pick_directory
+from neurodash import epochs
+from neurodash.behavior_io import behavior_time
 from neurodash.freezeframe_io import run_time_seconds
 from neurodash import merge
 from neurodash.behavior_io import (
@@ -82,22 +84,16 @@ def browse_neural(n_clicks):
         return path, Path(path).name, None, [], None, {"display": "none"}
 
     saved_bank = load_identity(path)["bank"]
-    # Label each group with the animal the filename puts in that position, so the
-    # choice reads "G20-3 · FP17-FP21" rather than making you work out which bank
-    # is whose. **Assumed, not known** — filename order matching headstage order is
-    # a lab convention being confirmed with NIH (it agrees with the 1-s xlsx
-    # putting G20-3 in Box 2). Deliberately a label and nothing more: it does not
-    # feed Session.animal_id or any export, so if the convention turns out to be
-    # reversed the result is a visible mislabel to correct, not data silently
-    # written under the wrong animal.
-    names = parse_animal_ids(path)
-    if len(names) != len(banks):
-        names = [""] * len(banks)
-    options = [
-        {"label": f"{name} · {b['label']}" if name else f"{b['label']}  ({len(b['indices'])} ch)",
-         "value": i}
-        for i, (b, name) in enumerate(zip(banks, names))
-    ]
+    # Labelled by BOX, not by animal name. Box N -> bank N is confirmed rig wiring
+    # (Box 1 = FP01-FP05, Box 2 = FP17-FP21), so it is a property of the file and
+    # true regardless of how the file was named. The animal name is a weaker claim
+    # — it relies on the filename listing animals in box order, which holds for
+    # "acquisition G16-1 and G20-3" but is just a naming habit — so it is left out
+    # rather than shown as though it were known. Look up your animal's box in the
+    # session notes or the video filename ("... Box 2.wmv").
+    options = [{"label": f"Box {i + 1} · {b['label']}  ({len(b['indices'])} ch)",
+                "value": i}
+               for i, b in enumerate(banks)]
     row_style = {"display": "flex", "alignItems": "center", "marginTop": "3px"}
     return path, Path(path).name, saved_bank, options, saved_bank, row_style
 
@@ -626,6 +622,15 @@ def _ratio_band(low, high, default):
     Input("input-theta-ratio-low-hi", "value"),
     Input("input-theta-ratio-high-lo", "value"),
     Input("input-theta-ratio-high-hi", "value"),
+    Input("toggle-epochs", "value"),
+    Input("input-epoch-baseline-start", "value"),
+    Input("input-epoch-baseline-pad", "value"),
+    Input("input-epoch-tone-duration", "value"),
+    Input("input-epoch-tone-pad", "value"),
+    Input("input-epoch-trace-pad", "value"),
+    Input("input-epoch-shock-duration", "value"),
+    Input("input-epoch-post-shock-delay", "value"),
+    Input("input-epoch-isi-duration", "value"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
@@ -633,6 +638,9 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
                   peak_dot_size, theta_estimator,
                   ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
+                  epoch_toggle, baseline_start, baseline_pad, tone_duration,
+                  tone_pad, trace_pad, shock_duration, post_shock_delay,
+                  isi_duration,
                   view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
@@ -666,6 +674,13 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_markers": "dots" in (peak_markers or []),
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
         "theta_estimator": theta_estimator or DEFAULT_THETA_ESTIMATOR,
+        "show_epochs": "on" in (epoch_toggle or []),
+        "epoch_params": {
+            "baseline_start": baseline_start, "baseline_pad": baseline_pad,
+            "tone_duration": tone_duration, "tone_pad": tone_pad,
+            "trace_pad": trace_pad, "shock_duration": shock_duration,
+            "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
+        },
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
@@ -893,6 +908,53 @@ clientside_callback(
     Output("div-channel-wrap", "style"),
     Input("tabs-main", "value"),
 )
+
+
+@callback(
+    Output("div-epoch-controls", "style"),
+    Output("div-epoch-warnings", "children"),
+    Input("store-neural-path", "data"),
+    Input("store-behavior-path", "data"),
+    Input("input-epoch-baseline-start", "value"),
+    Input("input-epoch-baseline-pad", "value"),
+    Input("input-epoch-tone-duration", "value"),
+    Input("input-epoch-tone-pad", "value"),
+    Input("input-epoch-trace-pad", "value"),
+    Input("input-epoch-shock-duration", "value"),
+    Input("input-epoch-post-shock-delay", "value"),
+    Input("input-epoch-isi-duration", "value"),
+)
+def render_epoch_controls(neural_path, behavior_path, baseline_start, baseline_pad,
+                          tone_duration, tone_pad, trace_pad, shock_duration,
+                          post_shock_delay, isi_duration):
+    """Show the Epochs section for sessions that have a trial structure, and warn
+    when the current buffers produce windows that don't make sense.
+
+    Hidden entirely for open field, which has no TTLs and so no epochs. The
+    warnings matter because these are live controls and the failure is quiet: an
+    ISI window long enough to run into the next tone still draws, it just stops
+    measuring what it says it does.
+    """
+    if not neural_path:
+        return {"display": "none"}, ""
+    session = load_session_from_paths(neural_path, behavior_path or "")
+    trial = session.trial_events
+    if trial["tones"] is None:
+        return {"display": "none"}, ""
+
+    params = {
+        "baseline_start": baseline_start, "baseline_pad": baseline_pad,
+        "tone_duration": tone_duration, "tone_pad": tone_pad,
+        "trace_pad": trace_pad, "shock_duration": shock_duration,
+        "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
+    }
+    end = None
+    if session.has_behavior:
+        times = behavior_time(session.behavior_data)
+        end = float(times[-1]) if len(times) else None
+    built = epochs.build_epochs(trial["tones"], trial["shocks"], params, end)
+    warnings = epochs.overlap_warnings(built, trial["tones"])
+    return {"display": "block"}, [html.Div(w) for w in warnings]
 
 
 def _spect_params(window, step, c, max_freq):

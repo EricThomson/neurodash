@@ -72,6 +72,50 @@ EVENT_STOP_CHANNELS = ("EVT03",)
 TONE_DURATION_S = 20.0
 SHOCK_DURATION_S = 2.0
 
+# Epoch windows for a trace-conditioning session. Full rationale in
+# sandbox/acquisition/epoch_windows.md; defaults from wt_learning_streamlined.ipynb
+# and wt_acq_learning.ipynb.
+#
+# Two kinds of parameter, deliberately grouped that way in the sidebar:
+#
+#   TIMING HEDGES (baseline_pad, tone_pad, trace_pad) guard against clock slop.
+#   They were chosen for 1 Hz behavior; with 30 Hz behavior, 0.1 s bins and exact
+#   TTLs they may now be unnecessary. Tuning these is housekeeping.
+#
+#   DESIGN WINDOWS (baseline_start, post_shock_delay, isi_duration) are claims
+#   about the animal — how long it takes to settle, and how long the UR lasts
+#   ("that's how long it takes the freakout to stop"). Tuning these changes what
+#   is being measured, so it is a scientific decision, not cleanup.
+#
+# The ISI window is delay + duration ON PURPOSE. The notebooks wrote it as
+# `delay + record_duration - trailing_buffer`, which subtracts the buffer from a
+# length that already excludes it; that silently produced 90 s windows where
+# 120 s was intended and reached the saved results (isi_window_bug.md).
+ACQUISITION_EPOCH_PARAMS = {
+    "baseline_start":   10.0,   # skip the settling-in period
+    "baseline_pad":      1.0,   # stop short of the first tone
+    "tone_duration":    TONE_DURATION_S,
+    "tone_pad":          0.25,  # inset both ends of the tone
+    "trace_pad":         0.25,  # inset both ends of the trace
+    "shock_duration":   SHOCK_DURATION_S,
+    "post_shock_delay": 30.0,   # time for the UR to end
+    "isi_duration":    120.0,   # length of the ISI measurement window
+}
+
+# Epoch/event band colours follow utilities.overlay_epochs so figures stay
+# comparable with the notebooks. Low opacity because these tile most of the
+# session and full-saturation fills would bury the LFP; the gaps between bands
+# are the guard periods and are meant to read as gaps.
+DEFAULT_SHOW_EPOCHS = True
+EPOCH_COLORS = {"baseline": "orangered", "tone": "blue",
+                "trace": "fuchsia", "isi": "lime"}
+EPOCH_BAND_OPACITY = 0.10
+# The stimuli themselves, drawn over the epochs. The shock has no epoch of its
+# own (it falls in the guard gap between trace and isi), so without this it would
+# be invisible.
+EVENT_COLORS = {"tone_event": "blue", "shock_event": "magenta"}
+EVENT_BAND_OPACITY = 0.28
+
 # Alignment self-check. With no behavior-onset pulse anywhere, the neural/behavior
 # offset is anchored on the END of both recordings, so anything that changes the
 # behavior file's duration shifts everything silently. The check re-derives the
@@ -83,9 +127,27 @@ ALIGNMENT_TOLERANCE_S = 1.5
 # How big a Motion Index value has to be, as a percentile of the session, to count
 # as a startle. The five shock responses on the test file are 4798-7810 against a
 # 99.9th percentile of 3623 and a median of 79, so they clear this comfortably
-# while ordinary movement does not. Chosen empirically: a shift of one frame
-# already fails, and the intact file passes with all five.
-ALIGNMENT_SPIKE_PERCENTILE = 99.5
+# while ordinary movement does not.
+#
+# 99.9 rather than 99.5 because of the false-match rate. The test window is 3 s
+# wide (+/- the tolerance) = ~90 frames at 30 fps, so the chance that ordinary
+# motion clears the bar somewhere in it is 1-(1-p)^90: about 36% at the 99.5th
+# percentile but only ~9% at the 99.9th. That matters for the no-shock control
+# animals, which have no startle at all and would otherwise match one or two
+# shocks by luck and be reported as misaligned.
+ALIGNMENT_SPIKE_PERCENTILE = 99.9
+
+# Below this many matching shocks the result is ambiguous rather than a failure:
+# too few to distinguish "this animal was never shocked" from "the alignment is
+# wrong". Above it, startles demonstrably exist, so the ones that miss are real.
+ALIGNMENT_MIN_CONFIDENT_MATCHES = 2
+
+# The behavior file's stated 'Run Time' must match how far its data actually runs.
+# This is the direct test for the failure end-anchoring is exposed to — a trimmed
+# or truncated export — and unlike the startle test it is unambiguous, so it also
+# works for the no-shock control animals. The real file differs by 0.067 s (its
+# last sample is 1291.0 against a stated 1290.933), so 1 s is plenty of slack.
+ALIGNMENT_DURATION_TOLERANCE_S = 1.0
 
 # Channel Viewer
 CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating

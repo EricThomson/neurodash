@@ -129,6 +129,23 @@ def check_alignment(events, behavior_metadata, behavior_data, segment=None):
     times = behavior_time(behavior_data)
     motion = behavior_data[MOTION_COLUMN].to_numpy(dtype=float)
 
+    # Checked first, and separately from the startle, because it is the *direct*
+    # test of the thing end-anchoring is vulnerable to: the anchor is
+    # `stop marker - Run Time`, so if Run Time disagrees with how far the data
+    # actually runs, every derived time is shifted by that difference. It is also
+    # unambiguous, which the startle test is not — so it still works on the
+    # no-shock control animals, where there is no startle to look for.
+    stated = run_time_seconds(behavior_metadata)
+    actual = float(times[-1]) if len(times) else None
+    if stated is not None and actual is not None:
+        drift = actual - stated
+        if abs(drift) > config.ALIGNMENT_DURATION_TOLERANCE_S:
+            return False, (
+                f"The behavior file says it ran {stated:.1f} s but its data runs to "
+                f"{actual:.1f} s ({drift:+.1f} s). Alignment is anchored on "
+                f"'Run Time', so every neural time is shifted by that much — the "
+                f"export is probably truncated or trimmed.")
+
     # Ask whether a startle happens AT each shock TTL, rather than whether the
     # session's biggest spikes happen to be the shocks. Both alternatives were
     # tried and are worse:
@@ -154,6 +171,21 @@ def check_alignment(events, behavior_metadata, behavior_data, segment=None):
         elif worst_time is None:
             worst_time = float(t)
 
+    # None at all is ambiguous, and saying "misaligned" would be wrong half the
+    # time. The shock TTL fires for the whole rig, but only one box is wired to
+    # deliver it: on acquisition day the Box 1 animals are **no-shock controls**
+    # (confirmed against the lab's session notes, where Box 1 is "No Shock" and
+    # Box 2 "Shock" for every pair). A control animal has no startle to find, so
+    # a confident failure here would condemn a perfectly good file.
+    #
+    # A *partial* match is different — it means startles exist, so the animal was
+    # shocked, and some of them landing off the TTLs is real misalignment.
+    if matched < config.ALIGNMENT_MIN_CONFIDENT_MATCHES:
+        return False, (
+            f"Startle found at only {matched} of {len(predicted)} shock TTLs. "
+            f"Either this animal was not shocked (the no-shock control box), in "
+            f"which case the alignment cannot be checked this way, or the neural "
+            f"and behavior files do not belong together.")
     if matched < len(predicted):
         return False, (
             f"Only {matched} of {len(predicted)} shock TTLs coincide with a startle "

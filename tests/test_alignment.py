@@ -124,6 +124,31 @@ def test_a_shifted_alignment_is_caught(shift):
     assert not ok
 
 
+def test_a_no_shock_control_is_reported_as_ambiguous_not_misaligned():
+    """The shock TTL fires rig-wide, but only one box delivers it.
+
+    On acquisition day the Box 1 animals are no-shock controls (the lab's session
+    notes have Box 1 "No Shock" and Box 2 "Shock" for every pair), so they have no
+    startle to find. Calling that a misalignment would condemn a good file.
+    """
+    no_startle = behavior_frame(spike=80.0)     # nothing above baseline motion
+    ok, message = alignment.check_alignment(EVENTS, METADATA, no_startle, SEGMENT)
+    assert not ok
+    assert "not shocked" in message and "no-shock control" in message
+
+
+def test_a_partial_match_still_reads_as_misalignment():
+    """Startles exist, so the animal WAS shocked — misses are then real."""
+    frame = behavior_frame()
+    times = frame["Time"].to_numpy()
+    # flatten the startle on the last two trials only
+    for shock in (SHOCKS - ANCHOR)[3:]:
+        frame.loc[np.abs(times - shock) < 0.2, "Motion Index"] = 80.0
+    ok, message = alignment.check_alignment(EVENTS, METADATA, frame, SEGMENT)
+    assert not ok
+    assert "Only 3 of 5" in message
+
+
 def test_no_shocks_means_nothing_to_check_against():
     """Reports problems it can prove — absence of evidence is not a failure."""
     ok, message = alignment.check_alignment({"EVT01": TONES}, METADATA,
