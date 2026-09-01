@@ -106,6 +106,12 @@ ACQUISITION_EPOCH_PARAMS = {
 # comparable with the notebooks. Low opacity because these tile most of the
 # session and full-saturation fills would bury the LFP; the gaps between bands
 # are the guard periods and are meant to read as gaps.
+# Top of the Motion Index axis, as a percentile of the session. Lower than the
+# 99.9th the open-field panels use for velocity, because Motion Index is far more
+# spiky: median 79 against shock startles of 7810 on the test file, so p99.9
+# still leaves ordinary behavior in the bottom fifth of the panel. p99 clips ~1%.
+MOTION_YMAX_PERCENTILE = 99.0
+
 DEFAULT_SHOW_EPOCHS = True
 
 # Raw TTL onsets as black lines. A diagnostic rather than a display: the epoch and

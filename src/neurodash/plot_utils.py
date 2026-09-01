@@ -731,11 +731,15 @@ def _plot_freezing(fig, row, session, controls):
         row=row, col=1, secondary_y=True,
     )
 
-    # Same top-constraining rule the open-field behavioral panels use. Motion
-    # Index needs it more than velocity does: the five shock startles reach 7810
-    # against a median of 79, so an autoscaled axis is five spikes and a flat
-    # line where the whole session's behavior should be.
-    fig.update_yaxes(title_text="Motion", color="#e07800", range=velocity_ylim(motion),
+    # Same top-constraining idea as the open-field behavioral panels, but at the
+    # 99th percentile rather than velocity's 99.9th. Motion Index needs the harder
+    # cut: the shock startles reach 7810 against a median of 79, so even p99.9
+    # (3623) leaves the ordinary range squashed into the bottom fifth of the
+    # panel. p99 (1033) clips 1% of samples — the startles, which are visible as
+    # clipped spikes anyway and are marked by the shock bands regardless.
+    fig.update_yaxes(title_text="Motion", color="#e07800",
+                     range=(-1.0, float(np.nanpercentile(motion,
+                                                         config.MOTION_YMAX_PERCENTILE))),
                      row=row, col=1, secondary_y=False, fixedrange=True)
     fig.update_yaxes(title_text="Freezing", color="#2a6fb0", range=[-0.05, 1.6],
                      showticklabels=False, row=row, col=1, secondary_y=True,
