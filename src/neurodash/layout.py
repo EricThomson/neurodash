@@ -86,8 +86,9 @@ def _left_sidebar():
                                       debounce=True, style=_IDENTITY_INPUT),
                         ],
                         style={"display": "flex", "alignItems": "center"},
-                        title="Animal ID. Inferred from the EthoVision header, "
-                              "else the .pl2 filename.",
+                        title="Animal ID. Inferred from the behavior file, else the "
+                              ".pl2 filename — but left blank when the .pl2 holds "
+                              "two animals, since the filename then names both.",
                     ),
                     html.Div(
                         [
@@ -105,9 +106,15 @@ def _left_sidebar():
                     # protect an inferred value from a stray click, whereas this
                     # has no inferred value to protect — until it is answered the
                     # app offers no channels at all, so it has to stay reachable.
+                    #
+                    # Labelled "Channels", not "Subject": its values are channel
+                    # groups, and the app cannot know which animal sits on which
+                    # headstage (that is rig wiring, in none of the files). Calling
+                    # it Subject promised an answer it doesn't have. The animal is
+                    # named in the field above; this says which channels are its.
                     html.Div(
                         [
-                            html.Label("Subject", style=_IDENTITY_LABEL),
+                            html.Label("Channels", style=_IDENTITY_LABEL),
                             dcc.Dropdown(id="dropdown-bank", options=[], value=None,
                                          placeholder="Select…", clearable=False,
                                          style={"flex": 1, "fontSize": "0.85em"}),
@@ -115,8 +122,10 @@ def _left_sidebar():
                         id="div-bank-select",
                         style={"display": "none"},
                         title="This .pl2 holds more than one animal, on separate "
-                              "headstages. Pick this animal's channels; the other "
-                              "animal's are then never shown or exported.",
+                              "headstages. Pick this animal's channel group; the "
+                              "other animal's are then never shown or exported. "
+                              "Names are read from the filename in order and are a "
+                              "guess — check them against the behavior file.",
                     ),
                     html.Button("Edit", id="btn-edit-identity", n_clicks=0,
                                 style={"marginTop": "5px", "fontSize": "0.8em"},

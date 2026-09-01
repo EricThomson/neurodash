@@ -174,3 +174,104 @@ def test_channel_options_carry_absolute_stream_indices():
     """Indices address the whole stream, so they stay valid in extract_time_window."""
     s = fake_session(TWO_ANIMALS, bank_index=1)
     assert [i for i, _ in s.channel_options()] == [5, 6, 7, 8, 9]
+
+
+# --- animal ID on a multi-animal file -------------------------------------
+# The .pl2 filename names BOTH animals ("acquisition G16-1 and G20-3"), so
+# parse_animal_id's last token is an arbitrary pick between them. Blank until
+# the behavior file says — the same "leave it for a human" pattern open field
+# already uses for a missing Session field.
+
+def test_filename_is_not_trusted_when_the_pl2_holds_two_animals():
+    s = fake_session(TWO_ANIMALS, bank_index=1)
+    s.pl2_path = "/data/acquisition G16-1 and G20-3.pl2"
+    s.behavior_metadata = None
+    assert s.animal_id == ""
+
+
+def test_the_behavior_file_still_names_the_animal():
+    s = fake_session(TWO_ANIMALS, bank_index=1)
+    s.pl2_path = "/data/acquisition G16-1 and G20-3.pl2"
+    s.behavior_metadata = {"Mouse ID": "G20-3"}
+    assert s.animal_id == "G20-3"
+
+
+def test_single_animal_files_still_use_the_filename():
+    """Open field must keep inferring FC33-4 with no behavior file loaded."""
+    s = fake_session(ONE_ANIMAL)
+    s.pl2_path = "/data/170505_open_field_theta_FC33-4.pl2"
+    s.behavior_metadata = None
+    assert s.animal_id == "FC33-4"
+
+
+def test_a_saved_override_wins_over_inference():
+    """One answer for every panel and every export.
+
+    The Channel Viewer and the neural CSV took the inferred ID while the Session
+    Info panel and the analysis CSV took the override, so one recording could
+    export as `G20_3` in one file and `G20-3` in the other — the same split into
+    two JMP groups that canonical_id exists to prevent.
+    """
+    from neurodash.channel_io import save_identity
+    import neurodash.channel_io as channel_io
+
+    s = fake_session(TWO_ANIMALS, bank_index=1)
+    s.pl2_path = "/data/acquisition G16-1 and G20-3.pl2"
+    s.behavior_metadata = {"Animal": "G20_3"}
+    assert s.animal_id == "G20_3"          # inferred from the behavior file
+
+    saved = {"animal": "G20-3", "session": "acquisition", "bank": 1}
+    original = channel_io.load_identity
+    channel_io.load_identity = lambda _path: saved
+    try:
+        import neurodash.session as session_module
+        session_module.load_identity = lambda _path: saved
+        assert s.animal_id == "G20-3"      # the correction the user typed
+    finally:
+        channel_io.load_identity = original
+        session_module.load_identity = original
+
+
+def test_a_blank_override_falls_back_to_inference():
+    import neurodash.session as session_module
+    s = fake_session(ONE_ANIMAL)
+    s.pl2_path = "/data/170505_open_field_theta_FC33-4.pl2"
+    s.behavior_metadata = None
+    original = session_module.load_identity
+    session_module.load_identity = lambda _p: {"animal": "", "session": "", "bank": None}
+    try:
+        assert s.animal_id == "FC33-4"
+    finally:
+        session_module.load_identity = original
+
+
+# --- naming the channel groups --------------------------------------------
+# Filename order is ASSUMED to match headstage-bank order, pending confirmation
+# from the lab. It labels the picker and nothing else, so a wrong assumption is a
+# visible mislabel rather than data exported under the wrong animal.
+
+@pytest.mark.parametrize("stem, expected", [
+    ("acquisition G16-1 and G20-3", ["G16-1", "G20-3"]),
+    ("170505_open_field_theta_FC33-4", ["FC33-4"]),
+    ("phase animalA and animalB", ["animalA", "animalB"]),
+    ("rec G1 AND G2", ["G1", "G2"]),          # case-insensitive separator
+    ("", []),
+])
+def test_parse_animal_ids(stem, expected):
+    from neurodash.channel_io import parse_animal_ids
+    path = f"/data/{stem}.pl2" if stem else ""
+    assert parse_animal_ids(path) == expected
+
+
+def test_naming_does_not_leak_into_the_authoritative_animal_id():
+    """The label is a guess; the exported ID must still come from a real source."""
+    s = fake_session(TWO_ANIMALS, bank_index=1)
+    s.pl2_path = "/data/acquisition G16-1 and G20-3.pl2"
+    s.behavior_metadata = None
+    import neurodash.session as session_module
+    original = session_module.load_identity
+    session_module.load_identity = lambda _p: {"animal": "", "session": "", "bank": 1}
+    try:
+        assert s.animal_id == ""
+    finally:
+        session_module.load_identity = original

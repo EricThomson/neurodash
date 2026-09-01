@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from neurodash import config
-from neurodash.behavior_io import extract_position
+from neurodash.behavior_io import behavior_time, extract_position
 from neurodash.session import compute_theta_channels
 from neurodash.timebase import window_average
 
@@ -43,6 +43,10 @@ def _behavior_columns(session, times, step):
         return {}
 
     data = session.behavior_data
+    # EthoVision-shaped columns. A FreezeFrame session has no position or velocity
+    # at all, so it contributes no behavioral columns yet rather than raising.
+    if "X center" not in data.columns or "Velocity" not in data.columns:
+        return {}
     t_behav, x, y = extract_position(data, point="center")
     velocity = data["Velocity"].to_numpy(dtype=float)
     mobility = (data["Mobility"].to_numpy(dtype=float) if "Mobility" in data.columns
@@ -117,7 +121,7 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
 
     if not session.has_neural:
         # No spectrogram, so no spectral grid and no theta columns at all.
-        times = session.behavior_data["Recording time"].to_numpy(dtype=float)
+        times = behavior_time(session.behavior_data)
         return pd.DataFrame({"animal": animal, "session": session_name,
                              "time": times,
                              **_behavior_columns(session, None, step)})
@@ -145,6 +149,7 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
             estimator or config.DEFAULT_THETA_ESTIMATOR,
             tuple(ratio_low_band or config.DEFAULT_THETA_RATIO_LOW_BAND),
             tuple(ratio_high_band or config.DEFAULT_THETA_RATIO_HIGH_BAND),
+            time_offset=session.neural_time_offset,
         )
         if behavior is None:
             behavior = _behavior_columns(session, times, step)

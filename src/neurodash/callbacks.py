@@ -26,10 +26,12 @@ from neurodash.app_state import (
     last_browse_dir, remember_browse_dir, last_session, remember_session,
 )
 from neurodash.file_picker import pick_file, pick_save_path, pick_directory
+from neurodash.freezeframe_io import run_time_seconds
 from neurodash import merge
 from neurodash.behavior_io import (
     get_display_metadata, load_behavior_notes, save_behavior_notes,
-    missing_columns, missing_columns_message,
+    missing_columns, missing_columns_message, missing_columns_report,
+    behavior_format, FREEZEFRAME,
 )
 from neurodash.export import build_analysis_table
 from neurodash.neural_io import get_analog_signal, extract_time_window, build_neural_table
@@ -39,6 +41,7 @@ from neurodash.session import (
 )
 from neurodash.channel_io import (
     load_channels, save_channels, resolve_animal_id, resolve_session_name,
+    parse_animal_ids,
     load_identity, save_identity, canonical_id,
 )
 from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
@@ -79,8 +82,22 @@ def browse_neural(n_clicks):
         return path, Path(path).name, None, [], None, {"display": "none"}
 
     saved_bank = load_identity(path)["bank"]
-    options = [{"label": f"{b['label']}  ({len(b['indices'])} ch)", "value": i}
-               for i, b in enumerate(banks)]
+    # Label each group with the animal the filename puts in that position, so the
+    # choice reads "G20-3 · FP17-FP21" rather than making you work out which bank
+    # is whose. **Assumed, not known** — filename order matching headstage order is
+    # a lab convention being confirmed with NIH (it agrees with the 1-s xlsx
+    # putting G20-3 in Box 2). Deliberately a label and nothing more: it does not
+    # feed Session.animal_id or any export, so if the convention turns out to be
+    # reversed the result is a visible mislabel to correct, not data silently
+    # written under the wrong animal.
+    names = parse_animal_ids(path)
+    if len(names) != len(banks):
+        names = [""] * len(banks)
+    options = [
+        {"label": f"{name} · {b['label']}" if name else f"{b['label']}  ({len(b['indices'])} ch)",
+         "value": i}
+        for i, (b, name) in enumerate(zip(banks, names))
+    ]
     row_style = {"display": "flex", "alignItems": "center", "marginTop": "3px"}
     return path, Path(path).name, saved_bank, options, saved_bank, row_style
 
@@ -170,7 +187,7 @@ def render_neural_metadata(neural_path, behavior_path):
     sig_info = session.lfp_info
     dur = sig_info["duration_sec"]
     rec_dt = session.rec_datetime
-    animal = resolve_animal_id(session.pl2_path, session.behavior_metadata)
+    animal = session.animal_id
 
     # A two-animal .pl2 offers no channels until a subject is picked; say so here
     # rather than leaving an empty picker with no explanation.
@@ -178,7 +195,7 @@ def render_neural_metadata(neural_path, behavior_path):
     if session.is_multi_animal:
         banks = session.channel_banks
         if session.bank_index is None:
-            subject_note = f" — {len(banks)} animals, select a Subject above"
+            subject_note = f" — {len(banks)} animals, select a Channels group above"
         else:
             subject_note = f" ({banks[session.bank_index]['label']})"
 
@@ -189,6 +206,7 @@ def render_neural_metadata(neural_path, behavior_path):
         html.Div(f"Sampling rate: {sig_info['sampling_rate_hz']:.0f} Hz"),
         html.Div(f"Channels: {len(session.channel_options()) or sig_info['n_channels']}"
                  f"{subject_note}"),
+        *_alignment_block(session),
     ])
 
 
@@ -214,8 +232,7 @@ def fill_identity(neural_path, behavior_path):
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
     saved = load_identity(session.pl2_path)
-    animal = saved["animal"] or resolve_animal_id(session.pl2_path,
-                                                  session.behavior_metadata)
+    animal = saved["animal"] or session.animal_id
     label = saved["session"] or resolve_session_name(session.behavior_metadata)
     return animal, label
 
@@ -268,6 +285,71 @@ def _load_error(message):
                                     "whiteSpace": "normal"})
 
 
+def _alignment_block(session):
+    """How the neural clock was tied to the behavior clock, and whether it holds.
+
+    Shown because it is invisible otherwise and it is the single assumption every
+    number downstream rests on. The offset is anchored on the END of both
+    recordings — there is no behavior-onset pulse anywhere — so a truncated or
+    trimmed behavior export shifts everything silently. `check_alignment`
+    re-derives it from the animal's startle response to the shock TTLs, and a
+    failure has to be loud rather than a plausible-looking plot.
+
+    Nothing is shown when there are no events to align to, which is every
+    open-field session.
+    """
+    if not session.events or not session.has_behavior:
+        return []
+    offset = session.neural_time_offset
+    rows = [html.Div(f"Neural offset: {offset:+.2f} s", style={"marginTop": "4px"})]
+
+    trial = session.trial_events
+    if trial["tones"] is not None:
+        counts = f"{len(trial['tones'])} tones"
+        if trial["shocks"] is not None:
+            counts += f", {len(trial['shocks'])} shocks"
+        if trial["trace_s"] is not None:
+            counts += f", {trial['trace_s']:.1f} s trace"
+        rows.append(html.Div(counts))
+
+    ok, message = session.check_alignment()
+    if not ok:
+        rows.append(html.Div(f"⚠ {message}",
+                             style={"color": "#b00", "whiteSpace": "normal",
+                                    "marginTop": "4px"}))
+    elif message:
+        rows.append(html.Div(message, style={"color": "#2a7", "whiteSpace": "normal"}))
+    return rows
+
+
+def _freezeframe_metadata_block(metadata):
+    """Sidebar metadata for a FreezeFrame export.
+
+    Different fields from EthoVision's rather than the same ones left blank: the
+    camera is side-on so there is no arena or tracking-quality to report, and what
+    matters instead is the rig's detection settings — the motion threshold and the
+    minimum bout duration are exactly the parameters that decide what counts as
+    freezing, so they belong on screen next to the freezing trace.
+    """
+    md = metadata or {}
+    fps = md.get("Sample Rate (fps)")
+    run_time = run_time_seconds(md)
+    duration = (f"{int(run_time // 60)}m {run_time % 60:.1f}s"
+                if run_time is not None else "Unknown")
+    freeze_bout = md.get("Min Freeze Duration (seconds)")
+    return html.Div([
+        html.Div(f"Animal: {md.get('Animal') or 'Unknown'}"),
+        html.Div(f"Experiment: {md.get('Experiment') or 'Unknown'}"),
+        html.Div(f"Trial: {md.get('Trial') or 'Unknown'}"),
+        html.Div(f"Date: {md.get('Date') or 'Unknown'}"),
+        html.Div(f"Duration: {duration}"),
+        html.Div(f"Frame rate: {fps or 'Unknown'} fps"),
+        html.Div(f"Motion threshold: {md.get('Motion Threshold (au)') or 'Unknown'} au"),
+        html.Div(f"Min freeze bout: {freeze_bout or 'Unknown'} s"),
+        html.Div(f"Boxes: {md.get('Number of boxes') or 'Unknown'}"),
+    ])
+
+
 @callback(
     Output("store-behavior-path", "data"),
     Output("div-behavior-filename", "children"),
@@ -281,7 +363,8 @@ def browse_behavior(n_clicks):
         if not path:
             return no_update, no_update, no_update
     else:
-        path = pick_file("Select behavior file", "Excel (*.xlsx)", last_browse_dir())
+        path = pick_file("Select behavior file",
+                         "Behavior files (*.xlsx *.csv)", last_browse_dir())
     if not path:
         return no_update, no_update, no_update
     remember_browse_dir(path)
@@ -294,11 +377,16 @@ def browse_behavior(n_clicks):
 
     # Refuse a file we can't actually plot, and say which columns are missing.
     # Storing the path anyway would just move the failure into the figure callback,
-    # where a bare KeyError surfaces as nothing happening at all.
-    missing = missing_columns(session.behavior_data)
+    # where a bare KeyError surfaces as nothing happening at all. The requirement
+    # set comes from the file's own format, so a FreezeFrame export isn't judged
+    # against EthoVision's columns.
+    missing, message = missing_columns_report(path, session.behavior_data)
     if missing:
-        return (no_update, Path(path).name,
-                _load_error(missing_columns_message(path, missing)))
+        return no_update, Path(path).name, _load_error(message)
+
+    if behavior_format(session.behavior_data) == FREEZEFRAME:
+        return path, Path(path).name, _freezeframe_metadata_block(
+            session.behavior_metadata)
 
     info = get_display_metadata(session.behavior_metadata)
 
@@ -709,7 +797,8 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         ys = []
         t_neural = None
         for ch in channels:
-            t, y, sr = extract_time_window(sig, ch, 0, full_duration)
+            t, y, sr = extract_time_window(sig, ch, 0, full_duration,
+                                           session.neural_time_offset)
             if t_neural is None:
                 t_neural = t
             ys.append(y)
@@ -820,6 +909,12 @@ def _spect_params(window, step, c, max_freq):
     # Input, not State: loading a behavior file changes the resolved animal ID,
     # so the Channel Viewer's header has to follow it.
     Input("store-behavior-path", "data"),
+    # Likewise the subject: on a two-animal .pl2 the grid has nothing to show
+    # until a channel group is picked, and picking one has to redraw it rather
+    # than leave the "pick a group" message until you switch tabs.
+    # NOTE all Inputs are passed before all States regardless of declaration
+    # order, so this argument lands here, not at the end.
+    Input("store-bank", "data"),
     State("store-view-range", "data"),
     State("input-spect-window", "value"),
     State("input-spect-step", "value"),
@@ -827,7 +922,7 @@ def _spect_params(window, step, c, max_freq):
     State("input-spect-max-freq", "value"),
     prevent_initial_call=True,
 )
-def render_channel_tab(tab_value, neural_path, behavior_path, view_range,
+def render_channel_tab(tab_value, neural_path, behavior_path, bank_index, view_range,
                        spect_window, spect_step, spect_c, spect_max_freq):
     """Build the Channel Viewer when its tab is opened *or* a new file is loaded,
     at the current window. Refreshing on file load (not just tab switch) keeps the
@@ -840,10 +935,11 @@ def render_channel_tab(tab_value, neural_path, behavior_path, view_range,
                          style={"color": "#999", "padding": "20px"}),
                 no_update, no_update, no_update)
 
-    session = load_session_from_paths(neural_path, behavior_path or "")
+    session = load_session_from_paths(neural_path, behavior_path or "",
+                                      bank_index=bank_index)
     if not session.channel_options():
-        return (html.Div("This .pl2 holds more than one animal — select a Subject "
-                         "in the sidebar to review its channels.",
+        return (html.Div("This .pl2 holds more than one animal — pick this "
+                         "animal's Channels group in the sidebar to review it.",
                          style={"color": "#999", "padding": "20px"}),
                 no_update, no_update, no_update)
     channel_data = load_channels(session.pl2_path, session)
@@ -1263,8 +1359,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     # The sidebar fields are authoritative — they're inference unless the user
     # corrected them, and a correction is the only way to fix free text somebody
     # typed into EthoVision.
-    animal = canonical_id(animal_field or "") or resolve_animal_id(
-        session.pl2_path, session.behavior_metadata)
+    animal = canonical_id(animal_field or "") or session.animal_id
     session_name = canonical_id(session_field or "", lowercase=True) or         resolve_session_name(session.behavior_metadata)
     if not animal:
         return _NO_ANIMAL_HINT

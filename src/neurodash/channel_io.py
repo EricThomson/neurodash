@@ -47,6 +47,33 @@ def parse_animal_id(pl2_path):
     return re.split(r"[\s_]+", stem)[-1] if stem else ""
 
 
+def parse_animal_ids(pl2_path):
+    """Every animal named in a pl2 filename, in order.
+
+    Two-animal recordings are named "acquisition G16-1 and G20-3", so the parts
+    are split on " and " and each contributes its last token — the same rule
+    `parse_animal_id` uses for a single animal.
+
+    **The order is assumed to match the channel-bank order** (first animal named
+    -> lowest-numbered headstage bank), which is what lets the app say "G20-3 is
+    FP17-FP21" instead of making you work it out. That is a lab convention, not
+    something any file states: it agrees with the 1-s xlsx putting G20-3 in
+    `Box 2`, and it is being confirmed with NIH. Until then it seeds a default the
+    user can override, and the behavior file still outranks it — see
+    Session.animal_id.
+
+    Returns [] when no path is given.
+    """
+    if not pl2_path:
+        return []
+    stem = Path(pl2_path).stem.strip()
+    if not stem:
+        return []
+    parts = re.split(r"\s+and\s+", stem, flags=re.IGNORECASE)
+    return [canonical_id(re.split(r"[\s_]+", part.strip())[-1])
+            for part in parts if part.strip()]
+
+
 def canonical_id(value, lowercase=False):
     """A whitespace-free identifier, so one label can't split into several groups.
 
@@ -62,7 +89,7 @@ def canonical_id(value, lowercase=False):
     return text.lower() if lowercase else text
 
 
-def resolve_animal_id(pl2_path, behavior_metadata=None):
+def resolve_animal_id(pl2_path, behavior_metadata=None, filename_fallback=True):
     """The inferred animal ID, from the best source available.
 
     The EthoVision header wins when a behavior file is loaded; the pl2 filename is
@@ -76,11 +103,21 @@ def resolve_animal_id(pl2_path, behavior_metadata=None):
     strictly read-only with "rename the file" as the fix, which was reasonable when
     a filename was the only source and is not, now that the authoritative field is
     free text somebody typed. `load_identity` holds the override.
+
+    ``filename_fallback=False`` disables the filename guess, leaving the answer
+    blank until a behavior file supplies it. Pass it for a .pl2 holding more than
+    one animal: the filename then names *several*
+    ("acquisition G16-1 and G20-3"), so `parse_animal_id`'s last token is an
+    arbitrary pick between them. Blank is the honest answer, and it matters —
+    labelling one animal's channels with the other's name is exactly the mix-up
+    the per-subject channel filtering exists to prevent.
     """
     if behavior_metadata:
         mouse_id = get_mouse_id(behavior_metadata)
         if mouse_id is not None and str(mouse_id).strip():
             return canonical_id(mouse_id)
+    if not filename_fallback:
+        return ""
     return canonical_id(parse_animal_id(pl2_path))
 
 
@@ -167,7 +204,7 @@ def default_channels(session):
     return {
         "schema_version": SCHEMA_VERSION,
         "pl2_filename": Path(session.pl2_path).name if session.pl2_path else "",
-        "animal": resolve_animal_id(session.pl2_path, session.behavior_metadata),
+        "animal": session.animal_id,
         "comment": "",  # free-text note on the whole channel review
         "exemplar_channel_index": None,
         "channels": _empty_channel_entries(session),

@@ -89,9 +89,16 @@ def plot_session_view(session, controls):
     if session.has_behavior:
         # Mobility + velocity on one panel, each shown raw and subsampled onto the
         # export grid — the panel is the live check on what the export's binning costs.
-        if controls.get("show_motion", True):
+        #
+        # Both panels are EthoVision-shaped. A FreezeFrame session has no x/y at
+        # all (the camera is side-on) and reports Motion Index rather than
+        # velocity, so it draws neither rather than raising a KeyError deep in a
+        # figure callback — which with debug=False shows as nothing happening.
+        # Its own panels are still to come.
+        columns = session.behavior_data.columns
+        if controls.get("show_motion", True) and "Velocity" in columns:
             panels.append(("motion", _plot_motion))
-        if controls.get("show_position", True):
+        if controls.get("show_position", True) and "X center" in columns:
             panels.append(("position", _plot_position))
 
     if not panels:
@@ -248,7 +255,8 @@ def _plot_lfp(fig, row, session, controls):
     ts = None
     ys = []
     for ch in raw_channel_indices:
-        t, y, sr = extract_time_window(sig, ch, 0, full_duration)
+        t, y, sr = extract_time_window(sig, ch, 0, full_duration,
+                                      session.neural_time_offset)
         if ts is None:
             ts = t
         ys.append((ch, y))
@@ -300,6 +308,7 @@ def _plot_spectrogram(fig, row, session, controls):
             controls.get("spect_window_sec", config.DEFAULT_SPECT_WINDOW_SEC),
             controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC),
             controls.get("spect_c_param", config.DEFAULT_SPECT_C_PARAM),
+            time_offset=session.neural_time_offset,
         )
     except Exception as e:
         print(f"ERROR in _plot_spectrogram: {e}")
@@ -393,6 +402,7 @@ def _theta_channels(session, controls):
         controls.get("theta_estimator", config.DEFAULT_THETA_ESTIMATOR),
         controls.get("theta_ratio_low_band", config.DEFAULT_THETA_RATIO_LOW_BAND),
         controls.get("theta_ratio_high_band", config.DEFAULT_THETA_RATIO_HIGH_BAND),
+        time_offset=session.neural_time_offset,
     )
 
 
@@ -658,7 +668,8 @@ def plot_channel_figure(session, view_range=None, spect_params=None):
     for i, ch in enumerate(channel_indices):
         row = i + 1
         # --- raw LFP (col 1): full-resolution, normalized like the main viewer
-        t, y, _ = extract_time_window(sig, ch, 0, full_duration)
+        t, y, _ = extract_time_window(sig, ch, 0, full_duration,
+                                      session.neural_time_offset)
         normalized, y_range = normalize_lfp_traces([y])
         fig.add_trace(
             go.Scattergl(x=t, y=normalized[0], mode="lines",
@@ -673,6 +684,7 @@ def plot_channel_figure(session, view_range=None, spect_params=None):
             freqs, times, power_db = compute_spectrogram(
                 str(session.pl2_path), session.lfp_signal_index, ch, 0, full_duration,
                 max_freq, window, step, c_param,
+                time_offset=session.neural_time_offset,
             )
             fig.add_trace(
                 go.Heatmap(x=times, y=freqs, z=power_db,

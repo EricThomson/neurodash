@@ -54,6 +54,39 @@ LFP_STREAM_PREFERENCE = ("FP", "AI")
 # within-bank pairs run 0.28-0.99, so anything in between is a wide, safe gap.
 CHANNEL_BANK_INDEPENDENCE_THRESHOLD = 0.05
 
+# --- Fear-conditioning TTL events (acquisition / tone / context) --------------
+# Which pl2 event channels carry what. Lists rather than single names so a rig
+# that renumbers them needs a config edit, not a code change. Confirmed on the
+# acquisition test file: EVT01 = 5 tone onsets, EVT02 = 5 shocks (each 39.994 s
+# after its tone), EVT03 = a lone stop marker at the end of the behavior recording.
+EVENT_TONE_CHANNELS = ("EVT01",)
+EVENT_SHOCK_CHANNELS = ("EVT02",)
+EVENT_STOP_CHANNELS = ("EVT03",)
+
+# Tone and shock DURATIONS are protocol constants, not file facts — no pl2 event
+# channel carries a duration, and the source notebook hardcodes `tones + 20` and
+# `shocks + 2`. The lab's own `Events` table stores them as explicit fields, so
+# they are treated the same way here: defaults that a session can override.
+# The trace interval is NOT here: it is measured per session as shock onset minus
+# tone offset (20.0 s on the test file). Confirm with NIH whether these ever vary.
+TONE_DURATION_S = 20.0
+SHOCK_DURATION_S = 2.0
+
+# Alignment self-check. With no behavior-onset pulse anywhere, the neural/behavior
+# offset is anchored on the END of both recordings, so anything that changes the
+# behavior file's duration shifts everything silently. The check re-derives the
+# answer from the animal's startle: the largest motion spike near each shock TTL.
+# Tolerance is generous because the residual is the startle *response* lagging the
+# TTL (0.10-0.60 s measured, plus 33 ms frame binning), not clock error — this is
+# meant to catch gross failure, not to measure latency.
+ALIGNMENT_TOLERANCE_S = 1.5
+# How big a Motion Index value has to be, as a percentile of the session, to count
+# as a startle. The five shock responses on the test file are 4798-7810 against a
+# 99.9th percentile of 3623 and a median of 79, so they clear this comfortably
+# while ordinary movement does not. Chosen empirically: a shift of one frame
+# already fails, and the intact file passes with all five.
+ALIGNMENT_SPIKE_PERCENTILE = 99.5
+
 # Channel Viewer
 CHANNEL_QUALITY_OPTIONS = ["good", "fair", "bad"]  # per-channel quality rating
 CHANNEL_ROW_HEIGHT = 160  # px per channel row in the combined channel figure
@@ -117,4 +150,4 @@ DEFAULT_THETA_BANDPASS_ORDER = 8
 # the last machine-specific paths out of the repo.
 #
 # Files that have moved or been deleted are simply not reopened.
-REOPEN_LAST_SESSION = True
+REOPEN_LAST_SESSION = False

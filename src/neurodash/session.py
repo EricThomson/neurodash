@@ -14,13 +14,15 @@ import numpy as np
 
 from neurodash import config
 from neurodash import spectral_utils
+from neurodash import alignment
 from neurodash.neural_io import (
     load_pl2_block, list_analog_signal_summaries, get_analog_signal,
     extract_time_window, select_lfp_signal_index, detect_channel_banks,
+    load_events, segment_bounds,
 )
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import load_behavior_file
-from neurodash.channel_io import load_identity
+from neurodash.channel_io import load_identity, resolve_animal_id
 
 
 class Session:
@@ -33,7 +35,7 @@ class Session:
     def __init__(self,
                  pl2_path=None, block=None, channel_names=None, stream_info=None,
                  behavior_path=None, behavior_metadata=None, behavior_data=None,
-                 bank_index=None):
+                 bank_index=None, events=None, segment=None):
         # Neural
         self.pl2_path = pl2_path
         self.block = block
@@ -53,6 +55,9 @@ class Session:
         # Which subject's channels this session is about, when the file holds more
         # than one animal. None means "not chosen yet" and the caller should ask.
         self.bank_index = bank_index
+        # TTL events and the segment's pl2-clock bounds, for aligning to behavior.
+        self.events = events or {}
+        self.segment = segment
 
         # Behavioral
         self.behavior_path = behavior_path
@@ -104,6 +109,57 @@ class Session:
             return []
         return list(banks[self.bank_index]["indices"])
 
+    @property
+    def neural_time_offset(self):
+        """Seconds to add to neural sample time to get behavior time.
+
+        0 for open field, where the two recordings were started together, and 0
+        for a .pl2 loaded on its own — there is nothing to align to yet, so the
+        neural axis stays in sample time until a behavior file gives it an anchor.
+        -33.047 on the acquisition test file.
+        """
+        return alignment.neural_time_offset(self.events, self.behavior_metadata,
+                                            self.segment)
+
+    @property
+    def trial_events(self):
+        """Tone/shock times on the behavior clock, plus the measured trace interval.
+
+        Empty values for a session with no TTLs, which is every open-field file
+        and any fear session whose events weren't recorded.
+        """
+        return alignment.trial_structure(
+            self.events,
+            alignment.behavior_start_in_pl2(self.events, self.behavior_metadata,
+                                            self.segment))
+
+    def check_alignment(self):
+        """(ok, message) from re-deriving the offset off the animal's startle."""
+        return alignment.check_alignment(self.events, self.behavior_metadata,
+                                         self.behavior_data, self.segment)
+
+    @property
+    def animal_id(self):
+        """This session's animal ID: the saved override, else what can be inferred.
+
+        The single answer every panel and every export uses, which is the point —
+        the Channel Viewer and the neural CSV used to take the *inferred* ID while
+        the Session Info panel and the analysis CSV took the *override*, so one
+        recording could export as `G20_3` in one file and `G20-3` in the other.
+        That is exactly the split into two JMP groups that canonical_id exists to
+        prevent, and it was invisible until the two were compared side by side.
+
+        Blank when nothing can identify the animal yet: on a .pl2 holding two
+        animals the filename names both, so it can't identify either until the
+        behavior file says (see resolve_animal_id's filename_fallback).
+        """
+        if self.pl2_path:
+            override = load_identity(self.pl2_path)["animal"]
+            if override:
+                return override
+        return resolve_animal_id(self.pl2_path, self.behavior_metadata,
+                                 filename_fallback=not self.is_multi_animal)
+
     def channel_options(self):
         """(index, label) pairs for the channels this session may show or export.
 
@@ -125,6 +181,13 @@ class Session:
 def _cached_load_block(pl2_path_str):
     block, channel_names, stream_info = load_pl2_block(Path(pl2_path_str))
     return block, channel_names, stream_info
+
+
+@lru_cache(maxsize=4)
+def _cached_load_events(pl2_path_str):
+    """TTL events and segment bounds — a cheap header read, cached like the block."""
+    path = Path(pl2_path_str)
+    return load_events(path), segment_bounds(path)
 
 
 @lru_cache(maxsize=4)
@@ -150,6 +213,7 @@ def compute_spectrogram(
     bandpass_low=None,
     bandpass_high=None,
     bandpass_order=8,
+    time_offset=0.0,
 ):
     """Compute and cache spectrogram by pl2_path + parameters.
 
@@ -157,6 +221,10 @@ def compute_spectrogram(
     spectrogram — used by the "bandpass" theta estimator. They are part of the cache
     key, so filtered and unfiltered spectrograms coexist rather than evicting each
     other when you flip estimators.
+
+    ``time_offset`` shifts the returned times onto the behavior clock and is part
+    of the cache key, so a session viewed before and after its behavior file is
+    loaded doesn't reuse the wrong axis. It is 0 for open field.
 
     Keys on pl2_path_str for hashability (lru_cache requirement).
     """
@@ -174,7 +242,7 @@ def compute_spectrogram(
         c_parameter=c_parameter,
         max_frequency=max_frequency,
     )
-    return freqs, times, power_db
+    return freqs, times + time_offset, power_db
 
 
 def _clamp_band(band, theta_band, label):
@@ -210,6 +278,7 @@ def compute_theta_channels(
     estimator="argmax",
     ratio_low_band=config.DEFAULT_THETA_RATIO_LOW_BAND,
     ratio_high_band=config.DEFAULT_THETA_RATIO_HIGH_BAND,
+    time_offset=0.0,
 ):
     """Peak-theta-frequency, theta-band-power and theta-ratio series for one channel.
 
@@ -247,6 +316,7 @@ def compute_theta_channels(
         bp_low,
         bp_high,
         config.DEFAULT_THETA_BANDPASS_ORDER,
+        time_offset,
     )
     # The spectrogram is stored in dB; peak/power work on linear power. Smooth in
     # time first so the argmax peak doesn't hop between adjacent frequency bins.
@@ -303,9 +373,11 @@ def load_session_from_paths(neural_path_str, behavior_path_str, bank_index=None)
     Session
     """
     block = channel_names = stream_info = pl2_path = None
+    events = segment = None
     if neural_path_str:
         pl2_path = Path(neural_path_str)
         block, channel_names, stream_info = _cached_load_block(str(pl2_path))
+        events, segment = _cached_load_events(str(pl2_path))
         if bank_index is None:
             bank_index = load_identity(pl2_path)["bank"]
 
@@ -323,4 +395,6 @@ def load_session_from_paths(neural_path_str, behavior_path_str, bank_index=None)
         behavior_metadata=behavior_metadata,
         behavior_data=behavior_data,
         bank_index=bank_index,
+        events=events,
+        segment=segment,
     )

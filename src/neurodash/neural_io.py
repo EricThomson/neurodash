@@ -55,6 +55,48 @@ def load_pl2_block(pl2_path):
     return block, channel_names, stream_info
 
 
+def load_events(pl2_path):
+    """TTL event times from a .pl2, in pl2 clock seconds.
+
+    Returns ``{channel_name: np.ndarray}`` for channels that actually carry
+    events; the empty ones (a pl2 declares 40-odd whether used or not) are left
+    out, so the result doubles as "what event structure does this file have".
+
+    That structure is how the app tells acquisition/tone/context apart — tones
+    plus shocks, tones alone, or neither — rather than trusting a label. On the
+    acquisition file: EVT01 = 5 tone onsets, EVT02 = 5 shocks (each 39.994 s
+    after its tone), EVT03 = a single stop marker.
+
+    Read with the raw reader rather than through the Block: event channels are
+    cheap to read on their own, and the Block path costs a full signal load.
+    """
+    reader = neo.io.Plexon2IO(filename=str(pl2_path))
+    reader.parse_header()
+    events = {}
+    for i, channel in enumerate(reader.header["event_channels"]):
+        timestamps, _durations, _labels = reader.get_event_timestamps(
+            block_index=0, seg_index=0, event_channel_index=i)
+        if timestamps is None or len(timestamps) == 0:
+            continue
+        events[str(channel["name"])] = np.asarray(
+            reader.rescale_event_timestamp(timestamps, dtype="float64"),
+            dtype=float)
+    return events
+
+
+def segment_bounds(pl2_path):
+    """(t_start, t_stop) of the recording segment, in pl2 clock seconds.
+
+    ``t_start`` is where the analog samples begin — non-zero in every real file
+    (4343.83 for the open-field test file, 5545.32 for acquisition), because the
+    Plexon clock runs from when the software was launched, not when recording
+    started.
+    """
+    reader = neo.io.Plexon2IO(filename=str(pl2_path))
+    reader.parse_header()
+    return (float(reader.segment_t_start(0, 0)), float(reader.segment_t_stop(0, 0)))
+
+
 def select_lfp_signal_index(summaries):
     """Index of the analog signal holding the LFP.
 
@@ -211,8 +253,17 @@ def get_analog_signal(block, analog_signal_index):
     return block.segments[0].analogsignals[analog_signal_index]
 
 
-def extract_time_window(sig, channel_index, start_time_sec, duration_sec):
-    """Extract (t, y) for one channel from a Neo AnalogSignal."""
+def extract_time_window(sig, channel_index, start_time_sec, duration_sec,
+                        time_offset=0.0):
+    """Extract (t, y) for one channel from a Neo AnalogSignal.
+
+    ``t`` is seconds from the first sample, plus ``time_offset``. Note it is
+    deliberately NOT the pl2 clock: ``sig.t_start`` is non-zero in every real file
+    (4343.83 for the open-field test file) because the Plexon clock runs from when
+    the software launched, and sample-relative time is what every panel wants.
+    ``time_offset`` is what puts it on the behavior clock — see
+    alignment.neural_time_offset, which is 0 whenever the two already agree.
+    """
     sr = float(sig.sampling_rate.rescale("Hz").magnitude)
     n_samples = sig.shape[0]
     start_idx = int(round(start_time_sec * sr))
@@ -221,7 +272,7 @@ def extract_time_window(sig, channel_index, start_time_sec, duration_sec):
     end_idx = max(start_idx, min(end_idx, n_samples))
 
     y = np.asarray(sig[start_idx:end_idx, channel_index]).squeeze()
-    t = np.arange(start_idx, end_idx) / sr
+    t = np.arange(start_idx, end_idx) / sr + time_offset
     return t, y, sr
 
 
@@ -251,7 +302,8 @@ def build_neural_table(session, channel_indices, animal):
     t = None
     columns = {}
     for ch in channel_indices:
-        tt, y, _ = extract_time_window(sig, ch, 0, full_duration)
+        tt, y, _ = extract_time_window(sig, ch, 0, full_duration,
+                                       session.neural_time_offset)
         if t is None:
             t = tt
         columns[labels[ch]] = y

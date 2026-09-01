@@ -23,43 +23,139 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from neurodash import freezeframe_io
+
 
 # Columns neurodash indexes by name and cannot work without. Everything reads by
 # name, so extra columns and any column order are fine — only absence matters.
 # `Mobility` is deliberately NOT here: it is genuinely optional and already guarded
 # at each use, so a file without it loads and simply has no mobility panel.
 #
-# This is the *default* set, not a fixed one. Different session types will need
-# different columns, so both functions below take the requirement set as an
-# argument — a session type can pass its own without changing anything here.
+# This is the EthoVision set. Each behavior format declares its own below, and the
+# checks take the requirement set as an argument, so a new rig's export needs no
+# change here.
 REQUIRED_COLUMNS = ("Recording time", "X center", "Y center", "Velocity")
 
+ETHOVISION = "ethovision"
+FREEZEFRAME = "freezeframe"
 
-def missing_columns(data, required=REQUIRED_COLUMNS):
+# What each format calls its time column, what it requires, and where to look when
+# a file is missing something. Keyed by the format string stored on data.attrs.
+FORMATS = {
+    ETHOVISION: {
+        "time_column": "Recording time",
+        "required": REQUIRED_COLUMNS,
+        "source": "the EthoVision export template",
+    },
+    FREEZEFRAME: {
+        "time_column": freezeframe_io.TIME_COLUMN,
+        "required": freezeframe_io.REQUIRED_COLUMNS,
+        "source": "the FreezeFrame export settings",
+    },
+}
+
+
+def behavior_format(data):
+    """Which rig produced a loaded table — set by load_behavior_file."""
+    return (data.attrs or {}).get("format", ETHOVISION)
+
+
+def format_spec(data):
+    return FORMATS.get(behavior_format(data), FORMATS[ETHOVISION])
+
+
+def behavior_time(data):
+    """The table's time axis, whichever column this format calls it.
+
+    EthoVision has 'Recording time' and FreezeFrame has 'Time'; both are seconds
+    from the start of the behavior recording, so callers only need the array.
+    """
+    return data[format_spec(data)["time_column"]].to_numpy(dtype=float)
+
+
+def missing_columns(data, required=None):
     """Required columns absent from a loaded behavior table, in declared order.
 
-    Checked at load time so a differing EthoVision export template is reported as
-    a named, fixable problem. Without this the first access raises a bare KeyError
-    deep in a figure callback, which with debug=False surfaces as nothing at all —
-    the plot silently fails to update and the user gets no clue why.
+    Checked at load time so a differing export template is reported as a named,
+    fixable problem. Without this the first access raises a bare KeyError deep in
+    a figure callback, which with debug=False surfaces as nothing at all — the
+    plot silently fails to update and the user gets no clue why.
+
+    ``required`` defaults to whatever the loaded file's own format needs.
     """
+    if required is None:
+        required = format_spec(data)["required"]
     return [c for c in required if c not in data.columns]
 
 
-def missing_columns_message(path, missing, required=REQUIRED_COLUMNS):
+def missing_columns_message(path, missing, required=None, source=None):
     """Plain-language explanation of which columns a behavior file is missing."""
+    if required is None:
+        required = REQUIRED_COLUMNS
     names = ", ".join(f"'{c}'" for c in missing)
     plural = "columns" if len(missing) > 1 else "column"
+    optional = (" (plus optional 'Mobility')"
+                if required is REQUIRED_COLUMNS else "")
     return (f"{Path(path).name} is missing the {names} {plural}. "
-            f"neurodash needs {', '.join(required)} "
-            f"(plus optional 'Mobility') — check the EthoVision export template.")
+            f"neurodash needs {', '.join(required)}{optional} — check "
+            f"{source or 'the export template'}.")
+
+
+def missing_columns_report(path, data):
+    """(missing, message) for a loaded table, using its own format's requirements."""
+    spec = format_spec(data)
+    missing = missing_columns(data, spec["required"])
+    if not missing:
+        return [], ""
+    return missing, missing_columns_message(path, missing, spec["required"],
+                                            spec["source"])
 
 
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
 
+def detect_behavior_format(path):
+    """Which rig wrote this behavior file.
+
+    Sniffed from the contents, not the extension — the reader has to be chosen
+    before anything else can be read, and it's the one thing no header can tell
+    us. FreezeFrame is identified by its first two preamble keys; anything else
+    is assumed to be EthoVision, which then fails with a named missing-column
+    message rather than a mystery.
+
+    Note this only separates the *rigs*. It does not identify the session type:
+    acquisition, tone and context are all FreezeFrame and all read identically —
+    what differs between them is which TTL events the pl2 holds, which is read
+    from the neural file rather than guessed from the behavior one.
+    """
+    return (FREEZEFRAME if freezeframe_io.looks_like_freezeframe(path)
+            else ETHOVISION)
+
+
 def load_behavior_file(path):
+    """Load a behavior file from any supported rig.
+
+    Dispatches on the sniffed format and returns the same shape either way, so
+    callers that read columns by name don't care which rig produced the file.
+
+    Returns
+    -------
+    metadata : dict — key/value pairs from the file's header block.
+    data : pd.DataFrame — one row per frame, numeric where possible.
+        ``data.attrs['units']`` holds {column: unit_string};
+        ``data.attrs['format']`` records which reader was used.
+    """
+    fmt = detect_behavior_format(path)
+    if fmt == FREEZEFRAME:
+        metadata, data = freezeframe_io.load_freezeframe_file(path)
+    else:
+        metadata, data = _load_ethovision_file(path)
+    data.attrs["format"] = fmt
+    return metadata, data
+
+
+def _load_ethovision_file(path):
     """Load an EthoVision Excel export.
 
     Parameters
@@ -134,12 +230,17 @@ def _user_defined(metadata, *names):
 
 
 def get_mouse_id(metadata):
-    """Animal ID as the experimenter recorded it in the EthoVision header, or None.
+    """Animal ID as the experimenter recorded it in the behavior file, or None.
 
     This is the authoritative source — see channel_io.resolve_animal_id, which
-    prefers it over the pl2 filename so both agree.
+    prefers it over the pl2 filename so both agree. That matters most on a
+    two-animal .pl2, where the filename names both and can identify neither.
+
+    'animal' is FreezeFrame's, which puts the name on its own row above the table.
+    Safe to alias: no EthoVision key is a bare 'animal' (its own are 'Subject
+    name'/'Subject ID', deliberately not matched here — see _user_defined).
     """
-    return _user_defined(metadata, 'mouse id', 'animal id', 'rat id')
+    return _user_defined(metadata, 'mouse id', 'animal id', 'rat id', 'animal')
 
 
 def get_session_name(metadata):
@@ -148,8 +249,13 @@ def get_session_name(metadata):
     Another user-defined variable, so the same case-insensitive lookup as
     get_mouse_id — and, like it, absent from older exports (FC33-4 has none).
     Canonicalized by channel_io.resolve_session_name before it is used as a key.
+
+    'trial' is FreezeFrame's, whose 'Trial: Acquisition' names the session type
+    directly — the same slot the lab's schema calls `Session.phase`. EthoVision
+    has 'Trial name' and 'Trial ID' but no bare 'Trial', and this lookup matches
+    whole keys rather than prefixes, so those can't be picked up by mistake.
     """
-    return _user_defined(metadata, 'session', 'session name', 'phase')
+    return _user_defined(metadata, 'session', 'session name', 'phase', 'trial')
 
 
 def get_recording_delay(metadata):
