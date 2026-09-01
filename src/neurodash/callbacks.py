@@ -513,16 +513,21 @@ clientside_callback(
         var showChannel = (spectOn || thetaOn) && !onChannels;
         var showSpectParams = spectOn || thetaOn || onChannels;
         var showTheta = thetaOn && !onChannels;
+        /* Markers: any Session Viewer plot may draw dots — theta channels and
+           the binned behavioral traces both do — so this is not tied to theta. */
+        var showMarkers = !onChannels;
         return [
             {"display": showChannel ? "block" : "none"},
             {"display": showSpectParams ? "block" : "none"},
-            {"display": showTheta ? "block" : "none"}
+            {"display": showTheta ? "block" : "none"},
+            {"display": showMarkers ? "block" : "none"}
         ];
     }
     """,
     Output("div-analysis-channel", "style"),
     Output("div-spectrogram-controls", "style"),
     Output("div-theta-controls", "style"),
+    Output("div-marker-controls", "style"),
     Input("toggle-spectrogram", "value"),
     Input("toggle-theta", "value"),
     Input("tabs-main", "value"),

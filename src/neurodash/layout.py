@@ -440,21 +440,7 @@ def _right_sidebar():
                         inline=True,
                         style={"fontSize": "0.85em"},
                     ),
-                    dcc.Checklist(
-                        id="toggle-theta-peak-markers",
-                        options=[{"label": " Dots", "value": "dots"}],
-                        value=["dots"],
-                        style={"fontSize": "0.85em", "marginBottom": "4px"},
-                    ),
-                    html.Label("Dot size", style={"fontSize": "0.8em"}),
-                    dcc.Input(
-                        id="input-theta-dot-size",
-                        type="number",
-                        value=DEFAULT_THETA_DOT_SIZE,
-                        min=1, max=20, step=0.5,
-                        debounce=True,
-                        style={"width": "100%", "marginBottom": "8px"},
-                    ),
+
 
                     # Theta ratio sub-bands. Two narrow slices of the theta band:
                     # (low - high) / (low + high), so positive = slow theta dominant.
@@ -513,6 +499,44 @@ def _right_sidebar():
                 ],
                 id="div-theta-controls",
                 style={"display": "none"},
+            ),
+
+
+            # --- Markers ---
+            # Their own section rather than living under Theta, because the dots
+            # are drawn by every subsampled trace — theta peak *and* the binned
+            # behavioral traces. Buried under the theta controls they were
+            # unreachable whenever behavior was plotted without theta on, which
+            # left dots on screen and no way to turn them off. The ids keep their
+            # `theta` names so existing callbacks and the export are untouched.
+            html.Div(
+                [
+                    html.Div("Markers", style=_SECTION_HEADER),
+                    dcc.Checklist(
+                        id="toggle-theta-peak-markers",
+                        options=[{"label": " Dots", "value": "dots"}],
+                        value=["dots"],
+                        style={"fontSize": "0.85em", "marginBottom": "4px"},
+                    ),
+                    html.Label("Dot size", style={"fontSize": "0.8em"}),
+                    dcc.Input(
+                        id="input-theta-dot-size",
+                        type="number",
+                        value=DEFAULT_THETA_DOT_SIZE,
+                        min=1, max=20, step=0.5,
+                        debounce=True,
+                        style={"width": "100%", "marginBottom": "8px"},
+                    ),
+                ],
+                id="div-marker-controls",
+                # Visible by default, unlike the other collapsible sections: the
+                # visibility callback is prevent_initial_call, and the Session
+                # Viewer is the landing tab, so starting hidden would reproduce
+                # the very bug this section fixes — dots on screen with no
+                # control until you happened to toggle something.
+                style={"display": "block"},
+                title="Dots mark each time bin on the subsampled traces — the "
+                      "theta channels and the binned behavioral traces.",
             ),
 
             # --- Epoch windows (fear conditioning only; hidden when the .pl2
