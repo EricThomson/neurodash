@@ -534,7 +534,7 @@ def _theta_peak_trace(x, y, controls):
     Shared by the spectrogram overlay and the standalone panel so they match.
     """
     color = controls.get("theta_peak_color", "black")
-    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
     size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
     return go.Scattergl(
         x=x, y=y, mode=mode,
@@ -573,7 +573,7 @@ def _plot_theta_power(fig, row, session, controls):
         return
     # Dots + size track the theta-peak controls (same time bins, so they line up);
     # colour stays teal to match this panel's line.
-    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
     size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
     fig.add_trace(
         go.Scattergl(x=times, y=power, mode=mode,
@@ -604,7 +604,7 @@ def _plot_theta_ratio(fig, row, session, controls):
         _theta_error(fig, row, f"Theta ratio error: {e}")
         return
     # Dots + size track the theta-peak controls (same time bins, so they line up).
-    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
     size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
     fig.add_trace(
         go.Scattergl(x=times, y=ratio, mode=mode,
@@ -702,7 +702,7 @@ def _plot_freezing(fig, row, session, controls):
         row=row, col=1, secondary_y=False,
     )
     if has_binned:
-        mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+        mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
         fig.add_trace(
             go.Scattergl(
                 x=times, y=window_average(t, motion, times, step),
@@ -771,7 +771,7 @@ def _plot_motion(fig, row, session, controls):
         except Exception as e:
             print(f"ERROR getting spectral grid for motion panel: {e}")
     step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)
-    mode = "lines+markers" if controls.get("theta_peak_markers", True) else "lines"
+    mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
     size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
 
     def add_channel(values, colour, faint, label, unit, fmt, on_right):

@@ -498,10 +498,10 @@ class NeurodashViewer(QMainWindow):
 
         self.events_checkbox = None
         if self.trial:
-            self.events_checkbox = QCheckBox("Events")
+            self.events_checkbox = QCheckBox("TTLs")
             self.events_checkbox.setChecked(True)
             self.events_checkbox.setToolTip(
-                "Shade the epoch windows and mark shock onsets.")
+                "Mark tone (blue) and shock (magenta) TTL onsets.")
             self.events_checkbox.stateChanged.connect(self.on_events_toggled)
             controls_layout.addWidget(self.events_checkbox)
         controls_layout.addStretch(1)
@@ -554,6 +554,11 @@ class NeurodashViewer(QMainWindow):
             self.spec_plot.setLabel("bottom", "Time (s)")
 
             img = pg.ImageItem()
+            # The heatmap is a background and must sit under the event overlay.
+            # Exactly -100, not lower: ViewBox.addItem rewrites anything strictly
+            # below its own z (-100) to z+1, so asking for less bumps it to -99
+            # and puts it back on top of the bands.
+            img.setZValue(-100)
             img.setImage(self.power_db.T)
             img.setRect(QtCore.QRectF(
                 self.spec_times[0], self.freqs[0],
@@ -986,40 +991,35 @@ class NeurodashViewer(QMainWindow):
             self.show_frame(self.slider.value())
 
     def _build_event_overlay(self):
-        """Shade epochs and mark shock onsets on every time plot.
+        """Mark tone and shock TTL onsets on every time plot.
 
-        Overlays on the plots that already exist rather than adding a panel —
-        the same choice the theta peak made, and for the same reason: the viewer
-        is for navigating, so the trial structure has to be readable *against*
-        the signals rather than beside them.
+        Lines only. Shaded epoch bands were tried and removed: against four
+        stacked panels they read as clutter rather than structure, and the viewer
+        is a minimal neurobehavioral scope — you come here to watch the animal
+        against its signals, not to reason about analysis windows. Those live in
+        the Dash Session Viewer, where they can be tuned and compared. The epoch
+        windows are still in the handoff payload if this is ever reconsidered.
 
-        Built once and shown/hidden by the toggle. Rebuilding per frame would put
-        ~90 scene items into the playback path, which the frame budget has no
-        room for.
+        Built once and toggled with setVisible. Rebuilding per frame would put
+        these into the playback path, which the frame budget has no room for.
+
+        Z-value note: pyqtgraph's ViewBox.addItem rewrites anything strictly
+        below its own z (-100) to z+1, so the spectrogram heatmap asking for less
+        gets bumped to -99 and lands back on top. -100 exactly is the one value
+        it leaves alone, which is why the image sits there and these sit above.
         """
         self._event_items = []
         if not self.trial or not self._time_plots:
             return
-        colours = {"baseline": (255, 69, 0), "tone": (60, 90, 255),
-                   "trace": (255, 0, 255), "isi": (50, 205, 50)}
         for plot in self._time_plots:
-            for band in self.trial.get("epochs", []):
-                region = pg.LinearRegionItem(
-                    values=(band["start"], band["end"]), movable=False,
-                    brush=pg.mkBrush(*colours.get(band["kind"], (128, 128, 128)), 38))
-                region.setZValue(-100)          # behind the traces
-                for line in region.lines:       # edges are noise at this density
-                    line.setPen(pg.mkPen(None))
-                plot.addItem(region)
-                self._event_items.append(region)
-            # The shock has no epoch of its own — it sits in the guard gap
-            # between trace and isi — so without a line it would be invisible.
-            for onset in self.trial.get("shocks", []):
-                line = pg.InfiniteLine(angle=90, pos=onset,
-                                       pen=pg.mkPen((255, 0, 255), width=1))
-                line.setZValue(-50)
-                plot.addItem(line)
-                self._event_items.append(line)
+            for onsets, colour in ((self.trial.get("tones", []), (90, 140, 255)),
+                                   (self.trial.get("shocks", []), (255, 0, 255))):
+                for onset in onsets:
+                    line = pg.InfiniteLine(angle=90, pos=onset,
+                                           pen=pg.mkPen(colour, width=1))
+                    line.setZValue(-40)     # over the heatmap, under the traces
+                    plot.addItem(line)
+                    self._event_items.append(line)
 
     def on_events_toggled(self):
         show = self.events_checkbox.isChecked()

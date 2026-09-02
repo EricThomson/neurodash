@@ -23,6 +23,7 @@ from neurodash.config import (
     ACQUISITION_EPOCH_PARAMS,
     DEFAULT_SHOW_EPOCHS,
     DEFAULT_SHOW_TTL_PULSES,
+    DEFAULT_SHOW_MARKER_DOTS,
 )
 from neurodash.plot_utils import plot_channel_figure
 
@@ -578,7 +579,7 @@ def _right_sidebar():
                     dcc.Checklist(
                         id="toggle-theta-peak-markers",
                         options=[{"label": " Dots", "value": "dots"}],
-                        value=["dots"],
+                        value=["dots"] if DEFAULT_SHOW_MARKER_DOTS else [],
                         style={"fontSize": "0.85em", "marginBottom": "4px"},
                     ),
                     html.Label("Dot size", style={"fontSize": "0.8em"}),

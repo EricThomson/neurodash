@@ -183,6 +183,11 @@ DEFAULT_THETA_SMOOTH_WIDTH = 5      # Hann window (bins) smoothing the output se
 THETA_SPECT_TIME_SMOOTH_WIDTH = 5   # Hann window (bins) smoothing the spectrogram in time
                                     # before peak extraction (stabilizes the argmax)
 DEFAULT_THETA_DOT_SIZE = 4          # marker size for the theta-peak overlay dots
+# Dots mark each time bin on the subsampled traces (theta channels and binned
+# behavior). Off by default: they are a "which bin is this?" tool, and on a full
+# session they crowd the line they are meant to annotate. The Markers section in
+# the right sidebar turns them on.
+DEFAULT_SHOW_MARKER_DOTS = False
 
 # Theta ratio — (low - high) / (low + high) of mean power in two sub-bands, so
 # positive = slow theta dominates. Bands are fixed/manual here; deriving them from
