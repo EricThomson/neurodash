@@ -1326,9 +1326,20 @@ _ANALYSIS_HEADER_FIELDS = (
 # Column names carry no units — they'd compete with the channel suffix — so the units
 # live here instead. theta_power especially: dB with an arbitrary offset (amplifier
 # gain), so only differences mean anything and it is not an absolute level.
-_COLUMN_UNITS = ("time s; theta_peak Hz; theta_power dB (arbitrary offset — only "
-                 "differences are meaningful); theta_ratio unitless (-1..1); "
-                 "velocity cm/s; mobility %; x,y cm")
+_THETA_UNITS = ("time s; theta_peak Hz; theta_power dB (arbitrary offset — only "
+                "differences are meaningful); theta_ratio unitless (-1..1)")
+_COLUMN_UNITS = _THETA_UNITS + "; velocity cm/s; mobility %; x,y cm"
+_COLUMN_UNITS_FREEZEFRAME = (
+    _THETA_UNITS + "; motion arbitrary units (FreezeFrame Motion Index); "
+    "freezing 0/1 state sampled at the bin (NOT a fraction); epoch label, blank "
+    "where no epoch covers the bin; tone,shock 0/1 during the stimulus")
+
+
+def _column_units(session):
+    """Units line for the columns this session actually writes."""
+    if session.has_behavior and behavior_format(session.behavior_data) == FREEZEFRAME:
+        return _COLUMN_UNITS_FREEZEFRAME
+    return _COLUMN_UNITS
 
 
 def _flatten(text):
@@ -1352,7 +1363,7 @@ def _analysis_header(session, animal, behavior_path, channel_data,
     v = {k: "" for k in _ANALYSIS_HEADER_FIELDS}
     v["animal"] = animal or "Unknown"
     v["session"] = session_name or ""
-    v["column_units"] = _COLUMN_UNITS
+    v["column_units"] = _column_units(session)
 
     if session.has_neural:
         all_labels = session.lfp_info["channel_labels"]
@@ -1387,16 +1398,25 @@ def _analysis_header(session, animal, behavior_path, channel_data,
         v["time_base"] = "behavior sample times (no neural data loaded)"
 
     if session.has_behavior and behavior_path:
-        info = get_display_metadata(session.behavior_metadata)
-        start = info.get("start_time")
         v["behavior_source"] = Path(behavior_path).name
-        v["start_time"] = (start.strftime("%Y-%m-%d %H:%M")
-                           if hasattr(start, "strftime") else (start or ""))
-        v["experiment"] = info.get("experiment") or ""
-        v["trial"] = info.get("trial_name") or ""
-        v["arena"] = info.get("arena_name") or ""
+        md = session.behavior_metadata or {}
+        if behavior_format(session.behavior_data) == FREEZEFRAME:
+            # No arena: the camera is side-on and nothing is tracked in space.
+            # Its Trial field is the session type ("Acquisition"), which is the
+            # same thing EthoVision's trial_name occupies here.
+            v["start_time"] = str(md.get("Date") or "")
+            v["experiment"] = str(md.get("Experiment") or "")
+            v["trial"] = str(md.get("Trial") or "")
+        else:
+            info = get_display_metadata(session.behavior_metadata)
+            start = info.get("start_time")
+            v["start_time"] = (start.strftime("%Y-%m-%d %H:%M")
+                               if hasattr(start, "strftime") else (start or ""))
+            v["experiment"] = info.get("experiment") or ""
+            v["trial"] = info.get("trial_name") or ""
+            v["arena"] = info.get("arena_name") or ""
         if session.has_neural:
-            t_behav = session.behavior_data["Recording time"].to_numpy(dtype=float)
+            t_behav = behavior_time(session.behavior_data)
             rate = 1.0 / np.median(np.diff(t_behav)) if len(t_behav) > 1 else float("nan")
             # The bin is closed at both ends, so it catches one more sample than
             # step*rate would suggest.
