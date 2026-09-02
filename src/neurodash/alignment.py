@@ -59,15 +59,32 @@ def stop_time(events):
     return float(times[-1]) if times is not None else None
 
 
-def behavior_start_in_pl2(events, behavior_metadata, segment=None):
+def behavior_start_in_pl2(events, behavior_metadata, segment=None, fragments=None):
     """Where behavior t=0 sits on the pl2 clock, or None if it can't be found.
 
-    ``stop marker - behavior duration``. The segment's own ``t_stop`` is the
-    free cross-check: the two agree to 0.05 s on the acquisition file (5578.37 vs
-    5578.42), both well inside the 0.1-0.6 s startle lag that limits how precisely
-    this can be known at all. Disagreement between them means something is wrong
-    with the file, so it is reported rather than silently averaged.
+    **The two recordings START together; they do not stop together.** Behavior
+    t=0 is the moment neural acquisition begins. The lab's wrangling notes say so
+    outright: *"we often have 1291 measures of behavior, but the duration of the
+    neuronal recordings is 1290, and Jesse said that time zero of the behavioral
+    measure is the start time TTL."* Our file shows exactly that shape —
+    1290.933 s of behavior against 1290.117 s of neural — the behavior simply
+    running on after the neural stops. It is also what open field assumes, where
+    neural and behavior share an origin and only the *video* needs an explicit
+    delay (EthoVision's `Recording after`).
+
+    So the anchor is the start of the analog data, taken from the fragment table,
+    which is the only thing that states where the samples actually begin.
+
+    **End-anchoring (`stop marker - behavior duration`) was wrong.** It put
+    behavior t=0 at 5578.371 against the true 5579.344 — an 0.97 s error that
+    drew each shock TTL almost a second after the animal's response to it. Motion
+    rose 0.83 s *before* the shock on all five trials, and the response straddled
+    the 2 s shock window instead of filling it. Kept only as a fallback for a file
+    whose fragment table can't be read, where a rough anchor beats none.
     """
+    if fragments and segment is not None:
+        biggest = max(fragments, key=lambda f: f["n_samples"])
+        return float(segment[0]) + biggest["start_s"]
     duration = run_time_seconds(behavior_metadata)
     if duration is None:
         return None
@@ -102,31 +119,29 @@ def neural_time_offset(events, behavior_metadata, segment, neural_duration=None,
     0 — right there, because its two recordings were started together and
     behavior t=0 *is* neural sample 0.
     """
-    anchor = behavior_start_in_pl2(events, behavior_metadata, segment)
+    anchor = behavior_start_in_pl2(events, behavior_metadata, segment, fragments)
     duration = run_time_seconds(behavior_metadata)
     if anchor is None or duration is None:
         return 0.0
 
-    # Preferred: place the data by where its samples actually are. neo's array is
-    # the fragments concatenated, so for the fragment holding the bulk of the
-    # recording, array index i sits at
-    #     t_start + fragment_start + (i - samples_before) / rate
-    # and the offset that turns index/rate into behavior time is the bracket:
+    # Behavior t=0 is the start of the analog data, so inside the main fragment
+    # neural sample time already IS behavior time. What remains is neo's own
+    # bookkeeping: it concatenates the fragments, so any earlier fragment's
+    # samples shift the main one's indices, and the offset undoes exactly that.
     if fragments and segment is not None:
         biggest = max(range(len(fragments)), key=lambda k: fragments[k]["n_samples"])
         before = sum(f["n_samples"] for f in fragments[:biggest]) / float(sampling_rate)
-        return (float(segment[0]) + fragments[biggest]["start_s"] - before
-                - anchor)
+        return -before
 
-    # Fallback when the fragment table is unreadable: both recordings stop
-    # together, so the shorter one started later. Correct only if the analog data
-    # is contiguous — on the acquisition file it lands 44 ms out because it is not.
+    # Fallback when the fragment table is unreadable. Approximate: it assumes the
+    # recordings ended together, which they do not (see behavior_start_in_pl2).
     if neural_duration is None:
         return 0.0
     return float(duration) - float(neural_duration)
 
 
-def check_alignment(events, behavior_metadata, behavior_data, segment=None):
+def check_alignment(events, behavior_metadata, behavior_data, segment=None,
+                    fragments=None):
     """Re-derive the offset from the animal's startle, and report disagreement.
 
     A shock makes the animal jump, so the largest isolated spikes in ``Motion
@@ -145,7 +160,7 @@ def check_alignment(events, behavior_metadata, behavior_data, segment=None):
     problems it can prove, not absence of evidence.
     """
     shocks = shock_times(events)
-    anchor = behavior_start_in_pl2(events, behavior_metadata, segment)
+    anchor = behavior_start_in_pl2(events, behavior_metadata, segment, fragments)
     if shocks is None or anchor is None or behavior_data is None:
         return True, ""
     if MOTION_COLUMN not in behavior_data.columns:
@@ -189,9 +204,14 @@ def check_alignment(events, behavior_metadata, behavior_data, segment=None):
     # lands on ordinary motion (median 79, 99th percentile 1033).
     threshold = float(np.nanpercentile(motion, config.ALIGNMENT_SPIKE_PERCENTILE))
     matched, worst_time = 0, None
+    lo, hi = config.ALIGNMENT_WINDOW_S
     for t in predicted:
-        window = (times >= t - config.ALIGNMENT_TOLERANCE_S) & \
-                 (times <= t + config.ALIGNMENT_TOLERANCE_S)
+        # Asymmetric: the startle follows the shock. Searching backward as well
+        # only invites false matches on ordinary movement, and the window has to
+        # span the 2 s shock — the response runs +0.17 to +2.00 s on the test
+        # file. A symmetric +/-1.5 s window fitted the *mis-anchored* clock and
+        # stopped fitting once the anchor was corrected.
+        window = (times >= t + lo) & (times <= t + hi)
         if window.any() and np.nanmax(motion[window]) >= threshold:
             matched += 1
         elif worst_time is None:

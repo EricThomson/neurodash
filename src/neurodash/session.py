@@ -157,12 +157,13 @@ class Session:
         return alignment.trial_structure(
             self.events,
             alignment.behavior_start_in_pl2(self.events, self.behavior_metadata,
-                                            self.segment))
+                                            self.segment, self.analog_fragments))
 
     def check_alignment(self):
         """(ok, message) from re-deriving the offset off the animal's startle."""
         return alignment.check_alignment(self.events, self.behavior_metadata,
-                                         self.behavior_data, self.segment)
+                                         self.behavior_data, self.segment,
+                                         self.analog_fragments)
 
     @property
     def animal_id(self):

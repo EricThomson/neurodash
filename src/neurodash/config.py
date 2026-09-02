@@ -139,7 +139,13 @@ EVENT_BAND_OPACITY = 0.28
 # Tolerance is generous because the residual is the startle *response* lagging the
 # TTL (0.10-0.60 s measured, plus 33 ms frame binning), not clock error — this is
 # meant to catch gross failure, not to measure latency.
-ALIGNMENT_TOLERANCE_S = 1.5
+# The startle window, relative to the shock TTL. Asymmetric on purpose: the
+# response *follows* the shock, so looking backward only invites false matches on
+# ordinary movement. It spans the 2 s shock plus margin. A symmetric +/-1.5 s
+# window was used while the behavior clock was mis-anchored, and it stopped
+# fitting once the response moved to its true position (+0.17 to +2.00 s).
+ALIGNMENT_WINDOW_S = (-0.3, 2.6)
+ALIGNMENT_TOLERANCE_S = 1.5   # legacy symmetric width, still used for reporting
 # How big a Motion Index value has to be, as a percentile of the session, to count
 # as a startle. The five shock responses on the test file are 4798-7810 against a
 # 99.9th percentile of 3623 and a median of 79, so they clear this comfortably

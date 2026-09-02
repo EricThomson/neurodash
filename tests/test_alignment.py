@@ -43,7 +43,57 @@ def behavior_frame(shift_s=0.0, spike=8000.0, baseline=80.0):
     return frame
 
 
+# The real acquisition file's fragment table: 113 samples, a 33.906 s gap, then
+# the recording proper. Behavior t=0 is the start of that main fragment.
+FRAGMENTS = [{"start_s": 0.00055, "n_samples": 113},
+             {"start_s": 34.01955, "n_samples": 1290004}]
+ANALOG_START = SEGMENT[0] + FRAGMENTS[1]["start_s"]     # 5579.344
+
+
+# --- the anchor: the recordings START together ----------------------------
+# The lab's wrangling notes: "time zero of the behavioral measure is the start
+# time TTL". Anchoring on the end instead put behavior t=0 0.97 s early, which
+# drew every shock TTL almost a second after the animal's response to it.
+
+def test_anchor_is_the_start_of_the_analog_data():
+    assert alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT, FRAGMENTS) ==         pytest.approx(5579.344, abs=1e-3)
+
+
+def test_anchor_ignores_the_stop_marker_when_fragments_are_known():
+    """A wildly wrong stop marker must not move a fragment-anchored session."""
+    events = dict(EVENTS, EVT03=np.array([STOP + 500.0]))
+    assert alignment.behavior_start_in_pl2(events, METADATA, SEGMENT, FRAGMENTS) ==         alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT, FRAGMENTS)
+
+
+def test_end_anchoring_survives_only_as_a_fallback():
+    """Without a fragment table there is nothing better, but it is ~1 s out."""
+    fallback = alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT, None)
+    real = alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT, FRAGMENTS)
+    assert fallback == pytest.approx(STOP - RUN_TIME, abs=1e-6)
+    assert real - fallback == pytest.approx(0.973, abs=1e-2)
+
+
+def test_offset_only_undoes_neos_fragment_concatenation():
+    """Inside the main fragment, sample time already IS behavior time.
+
+    All the offset does is cancel the 113 orphan samples neo prepends.
+    """
+    assert alignment.neural_time_offset(EVENTS, METADATA, SEGMENT, NEURAL_DURATION,
+                                        FRAGMENTS, 1000.0) ==         pytest.approx(-0.113, abs=1e-6)
+
+
+def test_shock_times_land_on_the_protocol_baseline():
+    """Cross-check against the lab's own ingested cohort, which has tone1 at
+    159.936 s. End-anchoring gave 160.906 — a full second out."""
+    anchor = alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT, FRAGMENTS)
+    trial = alignment.trial_structure(EVENTS, anchor)
+    assert trial["tones"][0] == pytest.approx(159.933, abs=0.02)
+    assert trial["shocks"][0] == pytest.approx(199.927, abs=0.02)
+
+
 # --- the offset -----------------------------------------------------------
+# NOTE: the tests below pass fragments=None, so they exercise the FALLBACK.
+# The fragment-aware path — what actually runs — is covered above.
 
 def test_anchor_is_the_stop_marker_minus_the_behavior_duration():
     assert alignment.behavior_start_in_pl2(EVENTS, METADATA, SEGMENT) == \
