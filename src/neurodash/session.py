@@ -148,16 +148,28 @@ class Session:
         return fragment_gap_warning(self.analog_fragments)
 
     @property
+    def behavior_anchor(self):
+        """Where behavior t=0 sits on the pl2 clock — the ONE place that decides.
+
+        Every overlay and every derived time has to agree on this. It is a
+        property rather than a call each caller makes because the arguments are
+        easy to get wrong: omitting `analog_fragments` silently falls back to
+        end-anchoring, which is ~1 s off, and the result still plots. That is
+        exactly what happened to the TTL overlay — its lines sat a second away
+        from the epoch bands drawn from the same events.
+        """
+        return alignment.behavior_start_in_pl2(
+            self.events, self.behavior_metadata, self.segment,
+            self.analog_fragments)
+
+    @property
     def trial_events(self):
         """Tone/shock times on the behavior clock, plus the measured trace interval.
 
         Empty values for a session with no TTLs, which is every open-field file
         and any fear session whose events weren't recorded.
         """
-        return alignment.trial_structure(
-            self.events,
-            alignment.behavior_start_in_pl2(self.events, self.behavior_metadata,
-                                            self.segment, self.analog_fragments))
+        return alignment.trial_structure(self.events, self.behavior_anchor)
 
     def check_alignment(self):
         """(ok, message) from re-deriving the offset off the animal's startle."""

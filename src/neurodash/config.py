@@ -36,6 +36,18 @@ DEFAULT_SPECT_WINDOW_SEC = 1.5
 DEFAULT_SPECT_STEP_SEC = 0.1
 DEFAULT_SPECT_C_PARAM = 10
 
+# Colour limits for the spectrogram, as percentiles of the dB values on screen.
+# Autoscaling to min/max lets one artifact set the scale for the whole session:
+# a noise event on FP17 at 668.6 s reaches 33.8 dB above the session median, and
+# the shock artifacts do the same, flattening everything else into the bottom of
+# the colormap. Clipping to p1-p99 costs 2% of bins and compresses the range from
+# 58.3 dB to 22.3 dB — 2.6x more colour resolution on the signal you came to read.
+#
+# Not acquisition-specific: open field gains 2.0x by the same measure, and both
+# land at ~22 dB, which is a decent sign that's the real dynamic range of these
+# recordings and the rest is outliers.
+SPECT_COLOR_PERCENTILES = (1.0, 99.0)
+
 # Which analog stream in a .pl2 holds the LFP, most-preferred first. A pl2 can
 # carry several; which one is the LFP depends on the rig (the lab's schema calls
 # this `setup: original or digiamp`). "FP" is Plexon's field-potential stream

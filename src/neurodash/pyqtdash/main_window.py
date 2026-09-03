@@ -32,7 +32,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QIcon, QPalette
 
 from neurodash import arena_io
-from neurodash.plot_utils import velocity_ylim
+from neurodash.plot_utils import velocity_ylim, spectrogram_levels
 from neurodash.behavior_io import (
     load_behavior_file, get_recording_delay, estimate_position_pixels,
     behavior_time, behavior_format, FREEZEFRAME,
@@ -559,7 +559,9 @@ class NeurodashViewer(QMainWindow):
             # below its own z (-100) to z+1, so asking for less bumps it to -99
             # and puts it back on top of the bands.
             img.setZValue(-100)
-            img.setImage(self.power_db.T)
+            # Same robust limits the Dash figures use, so a spectrogram looks
+            # the same in both places and one artifact can't flatten the session.
+            img.setImage(self.power_db.T, levels=spectrogram_levels(self.power_db))
             img.setRect(QtCore.QRectF(
                 self.spec_times[0], self.freqs[0],
                 self.spec_times[-1] - self.spec_times[0],

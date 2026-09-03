@@ -189,8 +189,7 @@ def _add_ttl_pulses(fig, session, controls):
         return
     if not session.events:
         return
-    anchor = alignment.behavior_start_in_pl2(
-        session.events, session.behavior_metadata, session.segment)
+    anchor = session.behavior_anchor
     offset = session.neural_time_offset
     xref, yref = _axis_refs(fig, 1)
     for name, times in sorted(session.events.items()):
@@ -348,6 +347,18 @@ def normalize_lfp_traces(ys):
 # Panel plot functions
 # ---------------------------------------------------------------------------
 
+def spectrogram_levels(power_db):
+    """(low, high) dB colour limits, clipped to config.SPECT_COLOR_PERCENTILES.
+
+    Shared by the Session Viewer, the Channel Viewer and the pyqtdash image so a
+    spectrogram means the same thing wherever it is drawn. Robust rather than
+    min/max: a single artifact otherwise sets the scale for an entire session.
+    """
+    lo, hi = np.nanpercentile(power_db, config.SPECT_COLOR_PERCENTILES)
+    return (float(lo), float(hi)) if hi > lo else (float(np.nanmin(power_db)),
+                                                   float(np.nanmax(power_db)))
+
+
 def _plot_lfp(fig, row, session, controls):
     raw_channel_indices = list(controls.get("raw_channel_indices") or [])
     sig = get_analog_signal(session.block, session.lfp_signal_index)
@@ -435,10 +446,12 @@ def _plot_spectrogram(fig, row, session, controls):
         )
         return
 
+    zlo, zhi = spectrogram_levels(power_db)
     fig.add_trace(
         go.Heatmap(
             x=times, y=freqs, z=power_db,
             colorscale="Inferno",
+            zmin=zlo, zmax=zhi,
             showscale=False,
             name=f"Spectrogram ({channel_labels[ch]})",
             hoverinfo="skip",  # raw-heatmap hover (arbitrary dB) is noise; when theta
@@ -885,7 +898,9 @@ def plot_channel_figure(session, view_range=None, spect_params=None):
             )
             fig.add_trace(
                 go.Heatmap(x=times, y=freqs, z=power_db,
-                           colorscale="Inferno", showscale=False),
+                           colorscale="Inferno", showscale=False,
+                           **dict(zip(("zmin", "zmax"),
+                                      spectrogram_levels(power_db)))),
                 row=row, col=2,
             )
         except Exception as e:
