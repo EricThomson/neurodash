@@ -681,6 +681,11 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "theta_peak_dot_size": peak_dot_size or DEFAULT_THETA_DOT_SIZE,
         "theta_estimator": theta_estimator or DEFAULT_THETA_ESTIMATOR,
         "show_epochs": "on" in (epoch_toggle or []),
+        # Drives how often an epoch label repeats along a long band. Panning is
+        # clientside so the figure isn't rebuilt on pan — this is the window at
+        # build time, which is close enough to keep a name on screen.
+        "view_window_s": (view_range[1] - view_range[0]) if view_range
+                         else DEFAULT_VIEW_DURATION,
         "show_ttl_pulses": "on" in (ttl_toggle or []),
         "epoch_params": {
             "baseline_start": baseline_start, "baseline_pad": baseline_pad,
@@ -743,6 +748,8 @@ def _trial_payload(neural_path, behavior_path):
     end = float(times[-1]) if times is not None and len(times) else None
     built = epochs.build_epochs(trial["tones"], trial["shocks"],
                                 session.epoch_params, end)
+    spans = epochs.event_spans(trial["tones"], trial["shocks"],
+                               session.epoch_params)
     return {
         "tones": [float(x) for x in trial["tones"]],
         "shocks": ([float(x) for x in trial["shocks"]]
@@ -750,6 +757,10 @@ def _trial_payload(neural_path, behavior_path):
         "epochs": [{"label": e["label"], "kind": e["kind"],
                     "start": float(e["start"]), "end": float(e["end"])}
                    for e in built],
+        # Stimulus windows, for the viewer's 0/1 tone/shock trace. Durations are
+        # resolved here so the viewer never has to know protocol constants.
+        "spans": [{"kind": x["kind"], "start": float(x["start"]),
+                   "end": float(x["end"])} for x in spans],
     }
 
 

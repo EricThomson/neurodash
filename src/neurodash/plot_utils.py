@@ -90,6 +90,12 @@ def plot_session_view(session, controls):
         if controls.get("show_theta_power"):
             panels.append(("theta_power", _plot_theta_power))
 
+    # Stimuli, when the session has any. Below the neural panels and above
+    # behavior: it is what was done TO the animal, between the signal and the
+    # response.
+    if session.trial_events.get("tones") is not None:
+        panels.append(("events", _plot_events))
+
     if session.has_behavior:
         # Mobility + velocity on one panel, each shown raw and subsampled onto the
         # export grid — the panel is the live check on what the export's binning costs.
@@ -118,11 +124,12 @@ def plot_session_view(session, controls):
     def _height(label):
         if label == "spectrogram": return 3
         if label == "neural": return 2
+        if label == "events": return 0.6   # a 0/1 trace needs no room
         return 1
     height_ratios = [_height(label) for label, _ in panels]
     total = sum(height_ratios)
     row_heights = [h / total for h in height_ratios]
-    content_px = total * config.SESSION_PANEL_UNIT_PX
+    content_px = int(total * config.SESSION_PANEL_UNIT_PX)
 
     fig = make_subplots(
         rows=n, cols=1,
@@ -208,6 +215,52 @@ def _add_ttl_pulses(fig, session, controls):
             )
 
 
+def _step_series(spans, kind, t_end):
+    """(x, y) vertices for a 0/1 trace that is 1 during each span of ``kind``.
+
+    Explicit vertices rather than a sampled grid: a stimulus switches on and off
+    at exact times, and sampling would round those edges onto whatever bin
+    spacing happened to be in use.
+    """
+    xs, ys = [0.0], [0.0]
+    for span in spans:
+        if span["kind"] != kind:
+            continue
+        xs += [span["start"], span["start"], span["end"], span["end"]]
+        ys += [0.0, 1.0, 1.0, 0.0]
+    xs.append(float(t_end)); ys.append(0.0)
+    return xs, ys
+
+
+def _plot_events(fig, row, session, controls):
+    """Tone and shock as 0/1 traces — on or off, which is what a stimulus is.
+
+    Its own panel rather than bands over the signals: a band tints the LFP you
+    are trying to read, and the tone band duplicated the tone epoch band anyway.
+    Colours match the TTL lines in the pyqtdash viewer.
+    """
+    trial = session.trial_events
+    params = controls.get("epoch_params")
+    spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
+    t_end = 0.0
+    if session.has_behavior:
+        times = behavior_time(session.behavior_data)
+        t_end = float(times[-1]) if len(times) else 0.0
+
+    for kind, label in (("tone_event", "tone"), ("shock_event", "shock")):
+        xs, ys = _step_series(spans, kind, t_end)
+        fig.add_trace(
+            go.Scattergl(
+                x=xs, y=ys, mode="lines", name=label,
+                line=dict(color=config.EVENT_SERIES_COLORS[label], width=1.5),
+                hovertemplate=f"{label}: %{{y:.0f}}<extra></extra>",
+            ),
+            row=row, col=1,
+        )
+    fig.update_yaxes(title_text="Events", range=[-0.15, 1.35],
+                     tickvals=[0, 1], row=row, col=1, fixedrange=True)
+
+
 def _add_epoch_bands(fig, session, controls):
     """Shade the trial structure across every panel.
 
@@ -242,33 +295,30 @@ def _add_epoch_bands(fig, session, controls):
         fig.add_vrect(x0=band["start"], x1=band["end"],
                       fillcolor=colour, opacity=config.EPOCH_BAND_OPACITY,
                       line_width=0, layer="below", row="all", col=1)
-        # Named in the top panel. Colour alone doesn't say which band you are
-        # looking at once the view is zoomed in past the first tone, and telling
-        # trace from isi by hue is exactly the kind of thing that hides a wrong
-        # window. Anchored to the band's midpoint so it travels with it.
+        # One label, at the band's start. Colour alone doesn't say which band you
+        # are looking at, and telling trace from isi by hue is exactly the kind of
+        # thing that hides a wrong window.
+        #
+        # At the start rather than the midpoint: you meet the name as you arrive
+        # at the epoch, where a midpoint label on a 150 s baseline says nothing
+        # until you happen to land on it.
+        #
+        # It does NOT follow the viewport, and two attempts at making it are
+        # recorded here so they aren't retried. Repeating the label along the band
+        # reads as clutter — a name that keeps reappearing looks like data. A
+        # clientside relayout handler clamping it to the visible edge works, but
+        # `Plotly.relayout` re-renders the whole figure and the viewport changes
+        # on every drag tick, so it re-rendered a million-point WebGL trace plus a
+        # heatmap continuously and made panning unusable. Clientside panning
+        # exists precisely to avoid that re-render.
         fig.add_annotation(
-            x=0.5 * (band["start"] + band["end"]), y=1.0,
-            xref=xref, yref=f"{yref} domain",
+            x=band["start"], y=1.0, xref=xref, yref=f"{yref} domain",
             text=band["label"], showarrow=False,
-            yanchor="top", font=dict(size=9, color=colour),
+            xanchor="left", yanchor="top",
+            font=dict(size=9, color=colour),
             bgcolor="rgba(255,255,255,0.65)", borderpad=1,
         )
 
-    for span in epochs.event_spans(trial["tones"], trial["shocks"], params):
-        colour = config.EVENT_COLORS.get(span["kind"], "grey")
-        fig.add_vrect(x0=span["start"], x1=span["end"],
-                      fillcolor=colour, opacity=config.EVENT_BAND_OPACITY,
-                      line_width=0, layer="below", row="all", col=1)
-        # The shock is 2 s wide and belongs to no epoch, so it gets a name of its
-        # own or it reads as an unexplained sliver between trace and isi.
-        if span["kind"] == "shock_event":
-            fig.add_annotation(
-                x=0.5 * (span["start"] + span["end"]), y=0.0,
-                xref=xref, yref=f"{yref} domain",
-                text="shock", showarrow=False,
-                yanchor="bottom", font=dict(size=9, color=colour),
-                bgcolor="rgba(255,255,255,0.65)", borderpad=1,
-            )
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ def test_no_private_helper_is_decorated():
     "populate_channel_pickers",
     "choose_bank",
     "render_epoch_controls",
+    "update_figure",
 ])
 def test_expected_callback_is_registered(name):
     assert name in callback_function_names()

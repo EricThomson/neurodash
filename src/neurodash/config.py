@@ -135,14 +135,28 @@ DEFAULT_SHOW_EPOCHS = True
 # thing most worth watching; turn it off once the bands are trusted.
 DEFAULT_SHOW_TTL_PULSES = True
 TTL_LINE_COLOR = "black"
-EPOCH_COLORS = {"baseline": "orangered", "tone": "blue",
-                "trace": "fuchsia", "isi": "lime"}
+# THE single source of truth for epoch colors, read by the Dash bands, the
+# navigator strip, and anything else that draws trial structure. Hex for the
+# same reason as EVENT_SERIES_COLORS below. Values unchanged from the CSS names
+# they replace (orangered, cornflowerblue, fuchsia, lime).
+EPOCH_COLORS = {"baseline": "#ff4500", "tone": "#6495ed",
+                "trace": "#ff00ff", "isi": "#00ff00"}
 EPOCH_BAND_OPACITY = 0.10
+
 # The stimuli themselves, drawn over the epochs. The shock has no epoch of its
 # own (it falls in the guard gap between trace and isi), so without this it would
 # be invisible.
-EVENT_COLORS = {"tone_event": "blue", "shock_event": "magenta"}
-EVENT_BAND_OPACITY = 0.28
+# Bands are for EPOCHS ONLY. Tone and shock get their own 0/1 time series
+# instead: a stimulus is a thing that is on or off, and a trace says that
+# plainly, where a band over the LFP just tints the signal you are trying to
+# read. (The tone band was also redundant with the tone epoch band, which covers
+# the same span to within 0.25 s at each edge.)
+#
+# THE single source of truth for tone/shock colors, read by the Dash events
+# panel, the pyqtdash TTL lines and events trace, and the session navigator.
+# Hex rather than CSS names because every consumer parses hex: plotly directly,
+# pyqtgraph via mkPen. A tone/shock color hardcoded anywhere else is a bug (DRY).
+EVENT_SERIES_COLORS = {"tone": "#5a8cff", "shock": "#ff00ff"}
 
 # Alignment self-check. With no behavior-onset pulse anywhere, the neural/behavior
 # offset is anchored on the END of both recordings, so anything that changes the

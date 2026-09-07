@@ -37,7 +37,7 @@ from neurodash.behavior_io import (
     load_behavior_file, get_recording_delay, estimate_position_pixels,
     behavior_time, behavior_format, FREEZEFRAME,
 )
-from neurodash.config import MOTION_YMAX_PERCENTILE
+from neurodash.config import MOTION_YMAX_PERCENTILE, EVENT_SERIES_COLORS
 from neurodash.freezeframe_io import MOTION_COLUMN, freezing_state
 
 # Spatial calibration comes from ~/.neurodash/arenas via the Arena pulldown; see
@@ -74,6 +74,23 @@ def _load_behavior(path):
     fmt = behavior_format(data)
     delay = 0.0 if fmt == FREEZEFRAME else get_recording_delay(metadata)
     return data, metadata, delay, fmt
+
+
+def _event_step(trial, key, t_end):
+    """(x, y) vertices for a 0/1 trace that is 1 while a tone or shock is on.
+
+    Durations come from the handoff's epoch payload rather than being assumed
+    here — the viewer draws, it does not decide protocol constants.
+    """
+    span = {"tones": "tone_event", "shocks": "shock_event"}[key]
+    windows = [(s["start"], s["end"]) for s in trial.get("spans", [])
+               if s["kind"] == span]
+    xs, ys = [0.0], [0.0]
+    for start, end in windows:
+        xs += [start, start, end, end]
+        ys += [0.0, 1.0, 1.0, 0.0]
+    xs.append(float(t_end)); ys.append(0.0)
+    return xs, ys
 
 
 def _estimate_position_pixels(x, y, video_width, video_height):
@@ -424,6 +441,31 @@ class NeurodashViewer(QMainWindow):
 
                 self._behav_plots = [self.motion_plot, self.freeze_plot]
                 self._behav_cursors = [self.motion_cursor, self.freeze_cursor]
+
+                # Stimuli as a 0/1 trace rather than bands over the signals: a
+                # tone is on or off, and a trace says that plainly where a band
+                # just tints what you are trying to read. Same colours as the TTL
+                # lines, and as the Session Viewer's events panel.
+                if self.trial:
+                    self.event_plot = pg.PlotWidget(title="Tone / Shock")
+                    # Colors come from config so both viewers and the strip
+                    # stay in lockstep (DRY).
+                    for key, colour in (("tones", EVENT_SERIES_COLORS["tone"]),
+                                        ("shocks", EVENT_SERIES_COLORS["shock"])):
+                        xs, ys = _event_step(self.trial, key,
+                                             float(self.t_behav[-1]))
+                        self.event_plot.plot(xs, ys,
+                                             pen=pg.mkPen(colour, width=1.5))
+                    self.event_plot.setYRange(-0.15, 1.35, padding=0)
+                    self.event_plot.getAxis("left").setTicks(
+                        [[(0, "0"), (1, "1")]])
+                    self.event_plot.setMaximumHeight(110)
+                    self.event_cursor = pg.InfiniteLine(
+                        angle=90, pen=pg.mkPen("w", width=2))
+                    self.event_plot.addItem(self.event_cursor)
+                    behav_layout.addWidget(self.event_plot)
+                    self._behav_plots.append(self.event_plot)
+                    self._behav_cursors.append(self.event_cursor)
 
         if has_behavior and self.has_position:
             pos_ymin = np.nanpercentile(np.concatenate([self.x_cm, self.y_cm]), 10)
@@ -1014,8 +1056,9 @@ class NeurodashViewer(QMainWindow):
         if not self.trial or not self._time_plots:
             return
         for plot in self._time_plots:
-            for onsets, colour in ((self.trial.get("tones", []), (90, 140, 255)),
-                                   (self.trial.get("shocks", []), (255, 0, 255))):
+            for onsets, colour in (
+                    (self.trial.get("tones", []), EVENT_SERIES_COLORS["tone"]),
+                    (self.trial.get("shocks", []), EVENT_SERIES_COLORS["shock"])):
                 for onset in onsets:
                     line = pg.InfiniteLine(angle=90, pos=onset,
                                            pen=pg.mkPen(colour, width=1))
