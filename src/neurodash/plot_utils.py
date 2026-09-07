@@ -137,7 +137,7 @@ def plot_session_view(session, controls):
         vertical_spacing=0.05,
         # The motion panel carries two different units (% and cm/s), so it needs a
         # right-hand axis; every other panel is single-axis.
-        specs=[[{"secondary_y": label in ("motion", "freezing")}]
+        specs=[[{"secondary_y": label in ("motion", "freezing", "events")}]
                for label, _ in panels],
     )
 
@@ -249,18 +249,35 @@ def _plot_events(fig, row, session, controls):
         times = behavior_time(session.behavior_data)
         t_end = float(times[-1]) if len(times) else 0.0
 
-    for kind, label in (("tone_event", "tone"), ("shock_event", "shock")):
+    # One trace per axis, so each can carry its own colour-matched title. Both
+    # are 0/1 step functions of identical shape, so colour is the only thing
+    # distinguishing them and it has to be named somewhere. This is how the
+    # motion panel labels mobility against velocity, rather than a legend
+    # floating over the trace.
+    for kind, label, secondary in (("tone_event", "tone", False),
+                                   ("shock_event", "shock", True)):
         xs, ys = _step_series(spans, kind, t_end)
+        color = config.EVENT_SERIES_COLORS[label]
         fig.add_trace(
             go.Scattergl(
                 x=xs, y=ys, mode="lines", name=label,
-                line=dict(color=config.EVENT_SERIES_COLORS[label], width=1.5),
+                line=dict(color=color, width=1.5),
                 hovertemplate=f"{label}: %{{y:.0f}}<extra></extra>",
             ),
-            row=row, col=1,
+            row=row, col=1, secondary_y=secondary,
         )
-    fig.update_yaxes(title_text="Events", range=[-0.15, 1.35],
-                     tickvals=[0, 1], row=row, col=1, fixedrange=True)
+        # Identical ranges, so the two 0/1 traces sit on one visual scale and a
+        # pulse means the same height whichever axis it belongs to.
+        fig.update_yaxes(
+            title_text=label, title_font=dict(color=color),
+            tickfont=dict(color=color),
+            range=[-0.15, 1.35], fixedrange=True,
+            # Ticks on the left only: both axes are the same 0/1, so a second
+            # set would be noise. The right axis is there to carry a name.
+            tickvals=[0, 1] if not secondary else [],
+            showgrid=not secondary,
+            row=row, col=1, secondary_y=secondary,
+        )
 
 
 def _add_epoch_bands(fig, session, controls):

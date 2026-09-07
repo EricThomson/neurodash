@@ -76,6 +76,30 @@ def _load_behavior(path):
     return data, metadata, delay, fmt
 
 
+# Relative heights of the three FreezeFrame behavior panels. Motion Index is the
+# continuous signal you actually read a value off, so it gets the room; freezing
+# and the stimuli are both 0/1 and need only enough height to see the steps.
+# The events panel used to be capped at 110 px, which made it a sliver next to
+# its neighbours and hard to read against them.
+MOTION_PLOT_STRETCH = 3
+FREEZE_PLOT_STRETCH = 2
+EVENT_PLOT_STRETCH = 2
+
+# Fixed width for the behavior panels' left axes, in px.
+#
+# These are independent PlotWidgets, and pyqtgraph sizes each left axis to fit
+# its OWN tick text: Motion Index shows "8000" while freezing and the stimuli
+# show "0"/"1". The wider gutter pushes that panel's plot area right, so panels
+# stacked one above another and read against a shared time cursor end up with
+# visibly offset time axes even though their x ranges are identical. Pinning one
+# width aligns them, which is what plotly gives us for free in the Session Viewer
+# by sharing a margin across subplots.
+#
+# Generous on purpose: pinning too narrow clips the tick labels, and the cost of
+# being wide is only an empty gutter on the 0/1 panels.
+BEHAV_AXIS_WIDTH_PX = 60
+
+
 def _event_step(trial, key, t_end):
     """(x, y) vertices for a 0/1 trace that is 1 while a tone or shock is on.
 
@@ -424,7 +448,7 @@ class NeurodashViewer(QMainWindow):
                     padding=0.05)
                 self.motion_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
                 self.motion_plot.addItem(self.motion_cursor)
-                behav_layout.addWidget(self.motion_plot)
+                behav_layout.addWidget(self.motion_plot, MOTION_PLOT_STRETCH)
 
                 self.freeze_plot = pg.PlotWidget(title="Freezing")
                 # Step, not a line: the value is a state, and interpolating
@@ -437,7 +461,7 @@ class NeurodashViewer(QMainWindow):
                 self.freeze_plot.getAxis("left").setTicks([[(0, "0"), (1, "1")]])
                 self.freeze_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
                 self.freeze_plot.addItem(self.freeze_cursor)
-                behav_layout.addWidget(self.freeze_plot)
+                behav_layout.addWidget(self.freeze_plot, FREEZE_PLOT_STRETCH)
 
                 self._behav_plots = [self.motion_plot, self.freeze_plot]
                 self._behav_cursors = [self.motion_cursor, self.freeze_cursor]
@@ -448,22 +472,31 @@ class NeurodashViewer(QMainWindow):
                 # lines, and as the Session Viewer's events panel.
                 if self.trial:
                     self.event_plot = pg.PlotWidget(title="Tone / Shock")
+                    # Named traces, because tone and shock are 0/1 steps of
+                    # identical shape and colour is otherwise the only thing
+                    # telling them apart. A legend rather than the dual
+                    # colour-matched axes the Session Viewer uses: these panels
+                    # are independent PlotWidgets whose left axes already differ
+                    # in width ("8000" vs "0/1"), so hanging a right axis on one
+                    # of them shifts its plot area against its neighbours. This
+                    # is also how pos_plot names X against Y.
+                    self.event_plot.addLegend(offset=(-1, 1),
+                                              brush=pg.mkBrush(50, 50, 50, 200))
                     # Colors come from config so both viewers and the strip
                     # stay in lockstep (DRY).
-                    for key, colour in (("tones", EVENT_SERIES_COLORS["tone"]),
-                                        ("shocks", EVENT_SERIES_COLORS["shock"])):
+                    for key, label in (("tones", "tone"), ("shocks", "shock")):
                         xs, ys = _event_step(self.trial, key,
                                              float(self.t_behav[-1]))
-                        self.event_plot.plot(xs, ys,
-                                             pen=pg.mkPen(colour, width=1.5))
+                        self.event_plot.plot(
+                            xs, ys, name=label,
+                            pen=pg.mkPen(EVENT_SERIES_COLORS[label], width=1.5))
                     self.event_plot.setYRange(-0.15, 1.35, padding=0)
                     self.event_plot.getAxis("left").setTicks(
                         [[(0, "0"), (1, "1")]])
-                    self.event_plot.setMaximumHeight(110)
                     self.event_cursor = pg.InfiniteLine(
                         angle=90, pen=pg.mkPen("w", width=2))
                     self.event_plot.addItem(self.event_cursor)
-                    behav_layout.addWidget(self.event_plot)
+                    behav_layout.addWidget(self.event_plot, EVENT_PLOT_STRETCH)
                     self._behav_plots.append(self.event_plot)
                     self._behav_cursors.append(self.event_cursor)
 
@@ -490,6 +523,13 @@ class NeurodashViewer(QMainWindow):
 
             self._behav_plots = [self.pos_plot, self.vel_plot]
             self._behav_cursors = [self.pos_cursor, self.vel_cursor]
+
+        # One gutter width for every stacked behavior panel, so their plot areas
+        # start at the same x and the time axes line up. Outside both branches on
+        # purpose: it applies to the FreezeFrame stack (where "8000" against "0/1"
+        # made it obvious) and to position/velocity, which differ too, just less.
+        for plot in self._behav_plots:
+            plot.getAxis("left").setWidth(BEHAV_AXIS_WIDTH_PX)
 
         # Slider controls — three stacked rows:
         #   1) time label   2) play + 2× + scrub slider   3) window + zoom
