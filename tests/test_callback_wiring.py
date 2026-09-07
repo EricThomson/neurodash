@@ -13,6 +13,8 @@ import pytest
 
 from neurodash import callbacks
 from neurodash.app import create_app
+from neurodash.config import ACQUISITION_EPOCH_PARAMS
+from neurodash.layout import epoch_input_id
 
 CALLBACKS_SRC = Path(callbacks.__file__)
 
@@ -55,9 +57,45 @@ def test_no_private_helper_is_decorated():
     "choose_bank",
     "render_epoch_controls",
     "update_figure",
+    "collect_epoch_params",
+    "render_navigator",
 ])
 def test_expected_callback_is_registered(name):
     assert name in callback_function_names()
+
+
+def test_every_epoch_param_has_a_control():
+    """A config key with no sidebar control fires no callback and says nothing.
+
+    `collect_epoch_params` derives its Inputs from ACQUISITION_EPOCH_PARAMS, and
+    `suppress_callback_exceptions=True` (required, since the sidebar is built
+    after file load) means an Input naming a component that doesn't exist fails
+    silently: the parameter would simply never leave its default, with no error.
+    """
+    layout = create_app().layout
+    present = {c.id for c in layout._traverse() if getattr(c, "id", None)}
+    missing = [key for key in callbacks.EPOCH_PARAM_KEYS
+               if epoch_input_id(key) not in present]
+    assert not missing, f"epoch params with no control in the sidebar: {missing}"
+
+
+def test_epoch_params_store_exists():
+    """The one hop every epoch consumer depends on."""
+    layout = create_app().layout
+    assert "store-epoch-params" in {c.id for c in layout._traverse()
+                                    if getattr(c, "id", None)}
+
+
+def test_collect_epoch_params_falls_back_per_key():
+    """A cleared number box sends None; the store must still carry a usable set."""
+    values = [None] * len(callbacks.EPOCH_PARAM_KEYS)
+    assert callbacks.collect_epoch_params(*values) == dict(ACQUISITION_EPOCH_PARAMS)
+
+    values[0] = 99.0
+    result = callbacks.collect_epoch_params(*values)
+    assert result[callbacks.EPOCH_PARAM_KEYS[0]] == 99.0
+    assert result[callbacks.EPOCH_PARAM_KEYS[1]] == \
+        ACQUISITION_EPOCH_PARAMS[callbacks.EPOCH_PARAM_KEYS[1]]
 
 
 def test_browse_merge_folder_runs(tmp_path, monkeypatch, write_export):

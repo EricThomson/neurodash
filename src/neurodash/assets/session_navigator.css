@@ -1,0 +1,64 @@
+/* Session navigator strip — see src/neurodash/session_navigator.py.
+ *
+ * Only the STATIC rules live here. Anything computed from the session (a
+ * segment's left/width/background) is an inline style on the element, because
+ * it differs per segment. The split matters: a session has ~16 segments, and
+ * without these class rules each one would repeat the same six properties in
+ * the DOM.
+ *
+ * Every position is a percentage of the session, so nothing here knows pixel
+ * widths and a window resize costs nothing.
+ */
+
+#nav-strip {
+    position: relative;
+    height: 26px;
+    background: #eceff1;          /* gaps between epochs are the guard bands */
+    border-radius: 3px;
+    user-select: none;
+    cursor: pointer;
+}
+
+.nav-segment {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    overflow: hidden;             /* labels appear only where they fit */
+    pointer-events: none;         /* clicks fall through to the strip */
+}
+
+.nav-segment span {
+    font: 10px sans-serif;
+    color: #333;
+    padding-left: 3px;
+    white-space: nowrap;
+    line-height: 26px;
+}
+
+.nav-shock-tick {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    min-width: 2px;               /* 2 s of 1291 s would otherwise vanish */
+    pointer-events: none;
+    /* White halo: the tick is the same hue as the trace segment it abuts
+       (fuchsia and magenta are the same RGB), so without a separator it
+       reads as a saturated edge of the trace rather than its own event. */
+    outline: 1px solid #fff;
+}
+
+#nav-viewport {
+    position: absolute;
+    top: -2px;
+    height: calc(100% + 4px);
+    box-sizing: border-box;
+    border: 2px solid #444;
+    border-radius: 2px;
+    background: rgba(60, 60, 60, 0.15);
+    cursor: grab;
+    min-width: 6px;               /* stays grabbable at extreme zoom-out */
+}
+
+#nav-viewport:active {
+    cursor: grabbing;
+}

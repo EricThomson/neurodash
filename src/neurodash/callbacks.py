@@ -9,10 +9,12 @@ from pathlib import Path
 
 import numpy as np
 from dash import (
-    Input, Output, State, ALL, callback, clientside_callback, ctx, dcc, html, no_update,
+    Input, Output, State, ALL, callback, clientside_callback, ClientsideFunction,
+    ctx, dcc, html, no_update,
 )
 
 from neurodash.config import (
+    ACQUISITION_EPOCH_PARAMS,
     DEFAULT_VIEW_DURATION, DEFAULT_SPECT_MAX_FREQ,
     DEFAULT_SPECT_WINDOW_SEC, DEFAULT_SPECT_STEP_SEC, DEFAULT_SPECT_C_PARAM,
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
@@ -27,6 +29,8 @@ from neurodash.app_state import (
 )
 from neurodash.file_picker import pick_file, pick_save_path, pick_directory
 from neurodash import epochs
+from neurodash import session_navigator
+from neurodash.layout import epoch_input_id
 from neurodash.behavior_io import behavior_time
 from neurodash.freezeframe_io import run_time_seconds
 from neurodash import merge
@@ -589,6 +593,86 @@ clientside_callback(
 
 
 # ---------------------------------------------------------------------------
+# Session navigator — whole-session overview strip above the figure
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("div-navigator", "children"),
+    Input("store-neural-path", "data"),
+    Input("store-behavior-path", "data"),
+    Input("store-epoch-params", "data"),
+)
+def render_navigator(neural_path, behavior_path, epoch_params):
+    """Rebuild the strip when the session or the epoch windows change.
+
+    Same inputs as `render_epoch_controls`, and deliberately NOT gated on the
+    session having tones: the strip's other two jobs (navigating a long
+    recording, and showing what fraction of it is on screen) need only a time
+    axis, so open field gets one too. With no events the segment list is simply
+    empty. See session_navigator for why that is a feature and not a fallback.
+    """
+    if not neural_path and not behavior_path:
+        return None
+    session = load_session_from_paths(neural_path or "", behavior_path or "")
+    return session_navigator.build_strip(session, epoch_params)
+
+
+# Bind the drag handlers to a freshly rendered strip. Keyed on the strip's
+# children so Dash decides when the elements exist, which is what lets the JS
+# skip a readiness poll and rebind for free after the session changes.
+clientside_callback(
+    ClientsideFunction(namespace="session_navigator", function_name="init"),
+    Output("store-navigator-ready", "data"),
+    Input("div-navigator", "children"),
+)
+
+
+# The box follows native pan/zoom of the figure. Routed through the store that
+# already tracks the view rather than a plotly_relayout listener, so there is no
+# binding to lose when the graph re-renders. Writes CSS only, so it can't loop.
+clientside_callback(
+    ClientsideFunction(namespace="session_navigator", function_name="syncBox"),
+    Output("store-navigator-synced", "data"),
+    Input("store-view-range", "data"),
+)
+
+
+# ---------------------------------------------------------------------------
+# Epoch buffers — eight controls in, one dict out
+# ---------------------------------------------------------------------------
+
+# The keys ARE the parameter set; the ids are derived from them (layout.py mints
+# them the same way). So adding a buffer parameter to config plus a control to
+# the sidebar is enough — this callback and all four consumers pick it up with
+# no further edits, which is the whole point of routing them through a store.
+EPOCH_PARAM_KEYS = tuple(ACQUISITION_EPOCH_PARAMS)
+
+
+@callback(
+    Output("store-epoch-params", "data"),
+    *[Input(epoch_input_id(key), "value") for key in EPOCH_PARAM_KEYS],
+    prevent_initial_call=True,
+)
+def collect_epoch_params(*values):
+    """Gather the sidebar's epoch buffers into the one dict everything reads.
+
+    Consumers (figure, overlap warnings, analysis export, navigator) take a
+    single Input on the store instead of eight of their own. That kills two
+    layers of duplication at once — the repeated Input lists and the repeated
+    dict construction — and a parameter added to only some of them used to
+    disagree silently between the figure, the warnings and the export.
+
+    Routing through `epochs.epoch_params` means a cleared box falls back to its
+    config default here, once, rather than at each consumer.
+
+    `prevent_initial_call` because the store is already seeded with the same
+    defaults the controls display, so firing on load would only rebuild the
+    figure a second time with identical values.
+    """
+    return epochs.epoch_params(dict(zip(EPOCH_PARAM_KEYS, values)))
+
+
+# ---------------------------------------------------------------------------
 # Figure callback — single combined figure
 # ---------------------------------------------------------------------------
 
@@ -629,14 +713,7 @@ def _ratio_band(low, high, default):
     Input("input-theta-ratio-high-hi", "value"),
     Input("toggle-epochs", "value"),
     Input("toggle-ttl-pulses", "value"),
-    Input("input-epoch-baseline-start", "value"),
-    Input("input-epoch-baseline-pad", "value"),
-    Input("input-epoch-tone-duration", "value"),
-    Input("input-epoch-tone-pad", "value"),
-    Input("input-epoch-trace-pad", "value"),
-    Input("input-epoch-shock-duration", "value"),
-    Input("input-epoch-post-shock-delay", "value"),
-    Input("input-epoch-isi-duration", "value"),
+    Input("store-epoch-params", "data"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
@@ -644,9 +721,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
                   peak_dot_size, theta_estimator,
                   ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
-                  epoch_toggle, ttl_toggle, baseline_start, baseline_pad, tone_duration,
-                  tone_pad, trace_pad, shock_duration, post_shock_delay,
-                  isi_duration,
+                  epoch_toggle, ttl_toggle, epoch_params,
                   view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update
@@ -687,12 +762,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
         "view_window_s": (view_range[1] - view_range[0]) if view_range
                          else DEFAULT_VIEW_DURATION,
         "show_ttl_pulses": "on" in (ttl_toggle or []),
-        "epoch_params": {
-            "baseline_start": baseline_start, "baseline_pad": baseline_pad,
-            "tone_duration": tone_duration, "tone_pad": tone_pad,
-            "trace_pad": trace_pad, "shock_duration": shock_duration,
-            "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
-        },
+        "epoch_params": epoch_params,
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
@@ -996,18 +1066,9 @@ clientside_callback(
     Output("div-epoch-warnings", "children"),
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
-    Input("input-epoch-baseline-start", "value"),
-    Input("input-epoch-baseline-pad", "value"),
-    Input("input-epoch-tone-duration", "value"),
-    Input("input-epoch-tone-pad", "value"),
-    Input("input-epoch-trace-pad", "value"),
-    Input("input-epoch-shock-duration", "value"),
-    Input("input-epoch-post-shock-delay", "value"),
-    Input("input-epoch-isi-duration", "value"),
+    Input("store-epoch-params", "data"),
 )
-def render_epoch_controls(neural_path, behavior_path, baseline_start, baseline_pad,
-                          tone_duration, tone_pad, trace_pad, shock_duration,
-                          post_shock_delay, isi_duration):
+def render_epoch_controls(neural_path, behavior_path, params):
     """Show the Epochs section for sessions that have a trial structure, and warn
     when the current buffers produce windows that don't make sense.
 
@@ -1023,12 +1084,6 @@ def render_epoch_controls(neural_path, behavior_path, baseline_start, baseline_p
     if trial["tones"] is None:
         return {"display": "none"}, ""
 
-    params = {
-        "baseline_start": baseline_start, "baseline_pad": baseline_pad,
-        "tone_duration": tone_duration, "tone_pad": tone_pad,
-        "trace_pad": trace_pad, "shock_duration": shock_duration,
-        "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
-    }
     end = None
     if session.has_behavior:
         times = behavior_time(session.behavior_data)
@@ -1492,14 +1547,7 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     State("input-theta-ratio-low-hi", "value"),
     State("input-theta-ratio-high-lo", "value"),
     State("input-theta-ratio-high-hi", "value"),
-    State("input-epoch-baseline-start", "value"),
-    State("input-epoch-baseline-pad", "value"),
-    State("input-epoch-tone-duration", "value"),
-    State("input-epoch-tone-pad", "value"),
-    State("input-epoch-trace-pad", "value"),
-    State("input-epoch-shock-duration", "value"),
-    State("input-epoch-post-shock-delay", "value"),
-    State("input-epoch-isi-duration", "value"),
+    State("store-epoch-params", "data"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
@@ -1508,9 +1556,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
                         spect_window, spect_step, spect_c, spect_max_freq,
                         theta_estimator,
                         ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
-                        baseline_start, baseline_pad, tone_duration,
-                        tone_pad, trace_pad, shock_duration,
-                        post_shock_delay, isi_duration):
+                        epoch_params):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -1528,12 +1574,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     session = load_session_from_paths(neural_path or "", behavior_path or "")
     # Export the windows that are on screen, not config defaults — otherwise the
     # `epoch` column silently disagrees with the bands you tuned it against.
-    session.epoch_params = {
-        "baseline_start": baseline_start, "baseline_pad": baseline_pad,
-        "tone_duration": tone_duration, "tone_pad": tone_pad,
-        "trace_pad": trace_pad, "shock_duration": shock_duration,
-        "post_shock_delay": post_shock_delay, "isi_duration": isi_duration,
-    }
+    session.epoch_params = epoch_params
 
     channel_data = {}
     if neural_path:

@@ -169,7 +169,9 @@ def plot_session_view(session, controls):
     # viewer pane sizes it to the viewport), so all panels fit without scrolling.
     fig.update_layout(
         autosize=True,
-        margin=dict(l=60, r=20, t=20, b=40),
+        # The navigator strip pads itself to these — see config.
+        margin=dict(l=config.PLOT_MARGIN_LEFT_PX, r=config.PLOT_MARGIN_RIGHT_PX,
+                    t=20, b=40),
         dragmode="pan",
         showlegend=False,
         hovermode="x",

@@ -262,18 +262,23 @@ _EPOCH_WARNING_STYLE = {"fontSize": "0.78em", "color": "#b00", "marginTop": "6px
                         "whiteSpace": "normal"}
 
 
-def _epoch_input(input_id, label, title, step=0.5):
-    """One labelled number box for an epoch buffer.
+def epoch_input_id(key):
+    """The control id for one key of config.ACQUISITION_EPOCH_PARAMS.
 
-    The id's trailing name matches the key in config.ACQUISITION_EPOCH_PARAMS, so
-    the callback can map controls to parameters without a second lookup table
-    that could drift out of step with this one.
+    The single place the id is spelled. `collect_epoch_params` in callbacks.py
+    builds its Inputs through this, so the controls and the parameters they set
+    cannot drift apart, and adding a buffer parameter to config is enough to
+    make the callback pick it up.
     """
-    key = input_id.replace("input-epoch-", "").replace("-", "_")
+    return "input-epoch-" + key.replace("_", "-")
+
+
+def _epoch_input(key, label, title, step=0.5):
+    """One labelled number box for an epoch buffer."""
     return html.Div(
         [
             html.Label(label, style={"fontSize": "0.78em"}),
-            dcc.Input(id=input_id, type="number",
+            dcc.Input(id=epoch_input_id(key), type="number",
                       value=ACQUISITION_EPOCH_PARAMS[key],
                       min=0, step=step, debounce=True,
                       style={"width": "100%", "marginBottom": "4px"}),
@@ -529,13 +534,13 @@ def _right_sidebar():
                              title="These are statements about the animal, not "
                                    "the equipment — changing them changes what "
                                    "you are measuring."),
-                    _epoch_input("input-epoch-baseline-start", "Baseline start (s)",
+                    _epoch_input("baseline_start", "Baseline start (s)",
                                  "Skip the start of the session while the animal "
                                  "settles."),
-                    _epoch_input("input-epoch-post-shock-delay", "Post-shock delay (s)",
+                    _epoch_input("post_shock_delay", "Post-shock delay (s)",
                                  "How long the unconditioned response lasts. The "
                                  "ISI window starts after this."),
-                    _epoch_input("input-epoch-isi-duration", "ISI duration (s)",
+                    _epoch_input("isi_duration", "ISI duration (s)",
                                  "Length of the ISI measurement window."),
                     # Guards against clock slop. Sized for 1 Hz behavior; with
                     # exact TTLs and 0.1 s bins these may no longer be needed.
@@ -543,21 +548,21 @@ def _right_sidebar():
                              title="Hedges against imprecise timing. Chosen when "
                                    "behavior was sampled at 1 Hz; may not be "
                                    "needed now."),
-                    _epoch_input("input-epoch-baseline-pad", "Baseline pad (s)",
+                    _epoch_input("baseline_pad", "Baseline pad (s)",
                                  "Stop the baseline short of the first tone.",
                                  step=0.05),
-                    _epoch_input("input-epoch-tone-pad", "Tone pad (s)",
+                    _epoch_input("tone_pad", "Tone pad (s)",
                                  "Inset both ends of each tone epoch.", step=0.05),
-                    _epoch_input("input-epoch-trace-pad", "Trace pad (s)",
+                    _epoch_input("trace_pad", "Trace pad (s)",
                                  "Inset both ends of each trace epoch.", step=0.05),
                     # Protocol constants — in no file, so they have to be stated.
                     html.Div("Protocol", style=_EPOCH_GROUP_HEADER,
                              title="Durations no file records. The trace interval "
                                    "is measured from the TTLs, not set here."),
-                    _epoch_input("input-epoch-tone-duration", "Tone duration (s)",
+                    _epoch_input("tone_duration", "Tone duration (s)",
                                  "How long the tone plays. Not recorded in the "
                                  "pl2 — set by the protocol."),
-                    _epoch_input("input-epoch-shock-duration", "Shock duration (s)",
+                    _epoch_input("shock_duration", "Shock duration (s)",
                                  "How long the shock lasts. Not recorded in the "
                                  "pl2 — set by the protocol."),
                     html.Div(id="div-epoch-warnings", style=_EPOCH_WARNING_STYLE),
@@ -674,6 +679,10 @@ def make_layout():
                                     "fontSize": "1.2em",
                                 },
                             ),
+                            # Whole-session overview. Directly above the figure
+                            # because it indexes the same x axis; filled by a
+                            # callback and empty until data loads.
+                            html.Div(id="div-navigator"),
                             dcc.Graph(
                                 id="main-plot",
                                 responsive=True,
@@ -739,7 +748,15 @@ def make_layout():
             # Which subject's channels, on a .pl2 holding two animals. None means
             # single-animal (use them all) or not chosen yet (offer none).
             dcc.Store(id="store-bank", data=None),
+            # The epoch buffers as one dict. Every consumer (figure, warnings,
+            # export, navigator) reads this rather than the eight controls, so a
+            # new buffer parameter is added in one place instead of four.
+            dcc.Store(id="store-epoch-params", data=dict(ACQUISITION_EPOCH_PARAMS)),
             dcc.Store(id="store-channel-exemplar", data=None),
+            # Sinks for the navigator's clientside callbacks, which act on the
+            # DOM directly and have no real output to write.
+            dcc.Store(id="store-navigator-ready"),
+            dcc.Store(id="store-navigator-synced"),
             dcc.Store(id="store-channel-saved"),  # sink for the silent annotation auto-save
             dcc.Store(id="store-behavior-saved"),  # sink for the silent behavior-note auto-save
         ],

@@ -135,6 +135,26 @@ DEFAULT_SHOW_EPOCHS = True
 # thing most worth watching; turn it off once the bands are trusted.
 DEFAULT_SHOW_TTL_PULSES = True
 TTL_LINE_COLOR = "black"
+
+# --- Session navigator -----------------------------------------------------
+# The Session Viewer figure's horizontal margins. Shared rather than repeated
+# because the navigator strip is positioned in percent of the session and sits
+# directly above the plot, so its padding has to match these EXACTLY. If the two
+# drift the strip stops indexing the axis beneath it, and that reads as a
+# calibration error rather than a CSS one.
+PLOT_MARGIN_LEFT_PX = 60
+PLOT_MARGIN_RIGHT_PX = 20
+
+# Smallest gap between mid-drag commits, in ms. Measured relayout cost on a full
+# session is ~129 ms (Firefox) / ~119 (Chrome), so on that hardware this is
+# effectively "as fast as the browser can" and the JS in-flight guard is what
+# actually governs the rate. It earns its place on lighter figures and faster
+# machines, where it caps commits at 8/s instead of letting a trivial figure fire
+# one per frame. A self-tuning throttle was considered and rejected: the in-flight
+# guard already degrades gracefully on slow hardware, since a machine that cannot
+# finish a relayout simply cannot start the next one.
+# Measure with sandbox/profilers/profile_navigator.py before changing this.
+NAVIGATOR_LIVE_THROTTLE_MS = 125
 # THE single source of truth for epoch colors, read by the Dash bands, the
 # navigator strip, and anything else that draws trial structure. Hex for the
 # same reason as EVENT_SERIES_COLORS below. Values unchanged from the CSS names
