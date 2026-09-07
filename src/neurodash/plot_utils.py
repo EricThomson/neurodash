@@ -198,23 +198,66 @@ def _add_ttl_pulses(fig, session, controls):
         return
     if not session.events:
         return
+    refs = _overlay_axis_refs(fig)
+    if not refs:
+        return
     anchor = session.behavior_anchor
     offset = session.neural_time_offset
-    xref, yref = _axis_refs(fig, 1)
+    xref, yref = refs[0]
+    shapes, annotations = [], []
     for name, times in sorted(session.events.items()):
         for pl2_time in np.asarray(times, dtype=float):
             # Without a behavior file there is no anchor, so fall back to sample
             # time — the same axis the LFP is on, which is what matters here.
             x = (float(pl2_time) - anchor if anchor is not None
                  else float(pl2_time) - (session.segment[0] if session.segment else 0.0) + offset)
-            fig.add_vline(x=x, line=dict(color=config.TTL_LINE_COLOR, width=1),
-                          row="all", col=1)
-            fig.add_annotation(
+            for xr, yr in refs:
+                shapes.append(dict(
+                    type="line", xref=xr, yref=f"{yr} domain",
+                    x0=x, x1=x, y0=0, y1=1,
+                    line=dict(color=config.TTL_LINE_COLOR, width=1),
+                ))
+            annotations.append(dict(
                 x=x, y=0.5, xref=xref, yref=f"{yref} domain",
                 text=name, showarrow=False, textangle=-90,
                 font=dict(size=8, color=config.TTL_LINE_COLOR),
                 bgcolor="rgba(255,255,255,0.7)", borderpad=1,
-            )
+            ))
+    _extend_overlay(fig, shapes, annotations)
+
+
+def _overlay_axis_refs(fig):
+    """(xref, yref) per panel that has data, for overlays spanning every panel.
+
+    This replaces `row="all"` on add_vrect/add_vline, and the reason is
+    performance, measured: those helpers re-validate the entire shapes list on
+    every call, so cost is quadratic in the number of shapes. A real acquisition
+    figure has ~108 of them (16 epoch bands + 11 TTLs, times four panels) and
+    took **2257 ms** to add one at a time against **13 ms** assigned in bulk.
+    That was most of the multi-second lag on every control change.
+
+    Rows are taken from the traces rather than the grid, which also reproduces
+    `exclude_empty_subplots=True`: a panel with nothing in it gets no overlay,
+    so bands stay off an empty LFP panel when no channel is ticked. Traces are
+    added row by row, so first-seen order is row order. For a secondary-y panel
+    either axis works, since both share one domain.
+    """
+    seen = {}
+    for trace in fig.data:
+        seen.setdefault(trace.xaxis or "x", trace.yaxis or "y")
+    return list(seen.items())
+
+
+def _extend_overlay(fig, shapes, annotations):
+    """Append shapes and annotations in ONE validation pass each.
+
+    Appending preserves what other panels already put there — the LFP channel
+    labels are annotations too, and assigning wholesale would erase them.
+    """
+    if shapes:
+        fig.update_layout(shapes=list(fig.layout.shapes) + shapes)
+    if annotations:
+        fig.update_layout(annotations=list(fig.layout.annotations) + annotations)
 
 
 def _step_series(spans, kind, t_end):
@@ -308,12 +351,20 @@ def _add_epoch_bands(fig, session, controls):
         times = behavior_time(session.behavior_data)
         end = float(times[-1]) if len(times) else None
 
-    xref, yref = _axis_refs(fig, 1)
+    refs = _overlay_axis_refs(fig)
+    if not refs:
+        return
+    xref, yref = refs[0]
+    shapes, annotations = [], []
     for band in epochs.build_epochs(trial["tones"], trial["shocks"], params, end):
         colour = config.EPOCH_COLORS.get(band["kind"], "grey")
-        fig.add_vrect(x0=band["start"], x1=band["end"],
-                      fillcolor=colour, opacity=config.EPOCH_BAND_OPACITY,
-                      line_width=0, layer="below", row="all", col=1)
+        for xr, yr in refs:
+            shapes.append(dict(
+                type="rect", xref=xr, yref=f"{yr} domain",
+                x0=band["start"], x1=band["end"], y0=0, y1=1,
+                fillcolor=colour, opacity=config.EPOCH_BAND_OPACITY,
+                layer="below", line=dict(width=0),
+            ))
         # One label, at the band's start. Colour alone doesn't say which band you
         # are looking at, and telling trace from isi by hue is exactly the kind of
         # thing that hides a wrong window.
@@ -330,13 +381,14 @@ def _add_epoch_bands(fig, session, controls):
         # on every drag tick, so it re-rendered a million-point WebGL trace plus a
         # heatmap continuously and made panning unusable. Clientside panning
         # exists precisely to avoid that re-render.
-        fig.add_annotation(
+        annotations.append(dict(
             x=band["start"], y=1.0, xref=xref, yref=f"{yref} domain",
             text=band["label"], showarrow=False,
             xanchor="left", yanchor="top",
             font=dict(size=9, color=colour),
             bgcolor="rgba(255,255,255,0.65)", borderpad=1,
-        )
+        ))
+    _extend_overlay(fig, shapes, annotations)
 
 
 
@@ -407,7 +459,10 @@ def normalize_lfp_traces(ys):
     normalized = []
     for i, y in enumerate(ys):
         y_norm = (y - np.mean(y)) / (np.nanstd(y) + 1e-12) * 0.7 + i * 5.0
-        normalized.append(y_norm)
+        # float32 for the wire: these are display traces normalized to arbitrary
+        # units (see the hoverinfo="skip" note in _plot_lfp), so float64 spends
+        # a third of the payload on precision nothing can read off a screen.
+        normalized.append(np.asarray(y_norm, dtype=np.float32))
     n = len(ys)
     return normalized, (-6.0, (n - 1) * 5.0 + 6.0)
 
@@ -455,12 +510,20 @@ def _plot_lfp(fig, row, session, controls):
         ys.append((ch, y))
 
     normalized, y_range = normalize_lfp_traces([y for _, y in ys])
+    # x0/dx instead of an x array. The five traces share one time base built by
+    # `arange`, so an explicit x meant serializing the SAME 1.29M timestamps once
+    # per channel: measured 119.6 MB of figure JSON on a real session, which is
+    # what made every control change take seconds. Two numbers replace all of it
+    # (measured 145 -> 37 MB, 1.75 -> 0.46 s to serialize). Safe because the
+    # sampling is uniform by construction and nothing reads x off these traces.
+    x0 = float(ts[0])
+    dx = float(ts[1] - ts[0]) if len(ts) > 1 else 1.0
     xref, yref = _axis_refs(fig, row)
     for i, (ch, y_norm) in enumerate(zip([ch for ch, _ in ys], normalized)):
         offset = i * 5.0
         fig.add_trace(
             go.Scattergl(
-                x=ts, y=y_norm,
+                y=y_norm, x0=x0, dx=dx,
                 mode="lines",
                 line=dict(width=0.8),
                 hoverinfo="skip",  # LFP is normalized for display; its y isn't µV

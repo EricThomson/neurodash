@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from dash import (
     Input, Output, State, ALL, callback, clientside_callback, ClientsideFunction,
-    ctx, dcc, html, no_update,
+    ctx, dcc, html, no_update, Patch,
 )
 
 from neurodash.config import (
@@ -593,6 +593,57 @@ clientside_callback(
 
 
 # ---------------------------------------------------------------------------
+# Epoch overlay — redraw the bands without resending the figure
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("main-plot", "figure", allow_duplicate=True),
+    Input("store-epoch-params", "data"),
+    State("store-figure-controls", "data"),
+    State("store-neural-path", "data"),
+    State("store-behavior-path", "data"),
+    prevent_initial_call=True,
+)
+def update_epoch_overlay(epoch_params, controls, neural_path, behavior_path):
+    """Move the epoch bands when a buffer changes, sending only the overlay.
+
+    Changing e.g. `baseline_pad` moves coloured rectangles and nothing else, but
+    it used to be an Input on `update_figure`, so the entire figure was rebuilt
+    and re-sent: **119.6 MB and about ten seconds** on a real acquisition session
+    with five channels. Which is why `store-epoch-params` is a State there now
+    and this callback exists.
+
+    `Patch` replaces only `layout.shapes`, `layout.annotations` and the two event
+    traces, so the LFP and the spectrogram — all of the payload — stay in the
+    browser untouched.
+
+    The figure is still rebuilt server-side and the overlay lifted off it, rather
+    than shapes being computed some second way. One code path, so the bands here
+    cannot drift from the bands `plot_session_view` draws on load. That rebuild
+    is ~870 ms and none of it crosses the wire.
+    """
+    if not controls or (not neural_path and not behavior_path):
+        return no_update
+
+    session = load_session_from_paths(neural_path or "", behavior_path or "")
+    fig, _content_px = plot_session_view(session, {**controls,
+                                                   "epoch_params": epoch_params})
+    if fig is None:
+        return no_update
+
+    patch = Patch()
+    patch["layout"]["shapes"] = fig.layout.shapes
+    patch["layout"]["annotations"] = fig.layout.annotations
+    # Tone and shock widths come from the same parameters, so the events panel
+    # is the one bit of DATA an epoch edit can change.
+    for i, trace in enumerate(fig.data):
+        if trace.name in ("tone", "shock"):
+            patch["data"][i]["x"] = trace.x
+            patch["data"][i]["y"] = trace.y
+    return patch
+
+
+# ---------------------------------------------------------------------------
 # Session navigator — whole-session overview strip above the figure
 # ---------------------------------------------------------------------------
 
@@ -691,6 +742,7 @@ def _ratio_band(low, high, default):
     Output("main-plot", "figure"),
     Output("main-plot", "style"),
     Output("div-plot-placeholder", "style"),
+    Output("store-figure-controls", "data"),
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
     Input("checklist-show-channels", "value"),
@@ -713,7 +765,7 @@ def _ratio_band(low, high, default):
     Input("input-theta-ratio-high-hi", "value"),
     Input("toggle-epochs", "value"),
     Input("toggle-ttl-pulses", "value"),
-    Input("store-epoch-params", "data"),
+    State("store-epoch-params", "data"),
     State("store-view-range", "data"),
 )
 def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
@@ -724,7 +776,7 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   epoch_toggle, ttl_toggle, epoch_params,
                   view_range):
     if not neural_path and not behavior_path:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
     # No fallback to channel 0 here. An empty picker means either "nothing ticked"
@@ -766,14 +818,15 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
     fig.update_xaxes(range=[x0, x1], autorange=False)
     # Size to content but never exceed the viewport: a lone LFP panel is a top
     # strip; a full stack fills the screen without scrolling.
     graph_height = f"min({content_px}px, calc(100vh - 120px))"
-    return fig, {"display": "block", "height": graph_height}, {"display": "none"}
+    return (fig, {"display": "block", "height": graph_height},
+            {"display": "none"}, controls)
 
 
 # ---------------------------------------------------------------------------

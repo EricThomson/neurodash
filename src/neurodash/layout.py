@@ -752,6 +752,9 @@ def make_layout():
             # export, navigator) reads this rather than the eight controls, so a
             # new buffer parameter is added in one place instead of four.
             dcc.Store(id="store-epoch-params", data=dict(ACQUISITION_EPOCH_PARAMS)),
+            # The controls dict update_figure last drew with. Lets the epoch
+            # overlay rebuild without redeclaring update_figure's ~25 inputs.
+            dcc.Store(id="store-figure-controls"),
             dcc.Store(id="store-channel-exemplar", data=None),
             # Sinks for the navigator's clientside callbacks, which act on the
             # DOM directly and have no real output to write.
