@@ -52,6 +52,7 @@ class FakeSession(Session):
         self.lfp_signal_index = 0
         self.bank_index = None
         self.epoch_params = None
+        self.no_shock = False
         self.analog_signal_summaries = (
             [{"duration_sec": neural_duration, "channel_labels": [],
               "sampling_rate_hz": 1000.0}]

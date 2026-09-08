@@ -15,13 +15,14 @@ import numpy as np
 from neurodash import config
 from neurodash import spectral_utils
 from neurodash import alignment
+from neurodash import epochs
 from neurodash.neural_io import (
     load_pl2_block, list_analog_signal_summaries, get_analog_signal,
     extract_time_window, select_lfp_signal_index, detect_channel_banks,
     load_events, segment_bounds, analog_fragments, fragment_gap_warning,
 )
 from neurodash.spectral_utils import compute_multitaper_spectrogram
-from neurodash.behavior_io import load_behavior_file
+from neurodash.behavior_io import behavior_time, load_behavior_file
 from neurodash import freezeframe_io
 from neurodash.channel_io import (
     load_identity, parse_animal_ids, resolve_animal_id,
@@ -64,6 +65,9 @@ class Session:
         # Epoch buffer overrides from the sidebar, so an export uses the same
         # windows that are drawn on screen. None means config defaults.
         self.epoch_params = None
+        # True when this animal is a no-shock control: the shock TTL fired, but
+        # its box was not wired to deliver it. See event_spans.
+        self.no_shock = False
 
         # Behavioral
         self.behavior_path = behavior_path
@@ -173,6 +177,59 @@ class Session:
         and any fear session whose events weren't recorded.
         """
         return alignment.trial_structure(self.events, self.behavior_anchor)
+
+    @property
+    def extent_s(self):
+        """How far this session runs, in behavior-clock seconds, or None.
+
+        The union of what is loaded rather than either file alone: on the
+        acquisition test file Plexon stopped ~34 s before FreezeFrame did, so
+        the neural extent alone would cut short of behavior that exists, and a
+        neural-only session has no behavior extent at all.
+
+        That last case is why this is a Session property rather than something
+        each caller works out. `_plot_events` used to compute it inline and fall
+        back to **0.0** with no behavior file, and `_step_series` closes every
+        trace with a vertex at `t_end` — so the closing segment ran BACKWARDS to
+        the origin at y=0, painting a flat line across the whole panel under the
+        pulses. Drawn second, the shock's copy of that line sat on top and the
+        events panel showed magenta at zero everywhere, including inside its own
+        box. Loading a behavior file hid it completely, which is what made it so
+        hard to pin down.
+        """
+        ends = []
+        if self.has_behavior:
+            times = behavior_time(self.behavior_data)
+            if len(times):
+                ends.append(float(times[-1]))
+        info = self.lfp_info if self.has_neural else None
+        if info:
+            ends.append(float(info["duration_sec"]) + self.neural_time_offset)
+        ends = [end for end in ends if end > 0]
+        return max(ends) if ends else None
+
+    def event_spans(self, params=None):
+        """Tone and shock spans as THIS animal experienced them.
+
+        The one place the no-shock control is applied, so the export column, the
+        events panel, the navigator and the pyqtdash viewer cannot disagree about
+        whether a shock happened.
+
+        The shock TTL fires rig-wide but only one box is wired to deliver it, so a
+        control animal's event series was reporting a shock it never received.
+        Nothing in any file says which box was wired — the experimenter does, via
+        the No shock checkbox.
+
+        Epochs are deliberately NOT affected: `trace` and `isi` are protocol time
+        windows defined by the TTLs, and they are precisely the windows a control
+        is compared against. The TTL overlay is likewise untouched, since it shows
+        what the rig did rather than what the animal got.
+        """
+        trial = self.trial_events
+        spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
+        if self.no_shock:
+            return [s for s in spans if s["kind"] != "shock_event"]
+        return spans
 
     def check_alignment(self):
         """(ok, message) from re-deriving the offset off the animal's startle."""
@@ -501,7 +558,7 @@ def load_session_from_paths(neural_path_str, behavior_path_str, bank_index=None)
         behavior_path = Path(behavior_path_str)
         behavior_metadata, behavior_data = _cached_load_behavior(str(behavior_path))
 
-    return Session(
+    session = Session(
         pl2_path=pl2_path,
         block=block,
         channel_names=channel_names,
@@ -513,3 +570,9 @@ def load_session_from_paths(neural_path_str, behavior_path_str, bank_index=None)
         events=events,
         segment=segment,
     )
+    # `no_shock` is deliberately NOT read here. This function is lru_cached, so
+    # anything set at load time is frozen until the cache is evicted, and ticking
+    # the checkbox would then change nothing. The checkbox is the live source;
+    # each consumer sets it, exactly as it does with epoch_params. The sidecar
+    # persists it across loads via render_no_shock.
+    return session

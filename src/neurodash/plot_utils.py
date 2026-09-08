@@ -137,7 +137,7 @@ def plot_session_view(session, controls):
         vertical_spacing=0.05,
         # The motion panel carries two different units (% and cm/s), so it needs a
         # right-hand axis; every other panel is single-axis.
-        specs=[[{"secondary_y": label in ("motion", "freezing", "events")}]
+        specs=[[{"secondary_y": label in ("motion", "freezing")}]
                for label, _ in panels],
     )
 
@@ -273,8 +273,21 @@ def _step_series(spans, kind, t_end):
             continue
         xs += [span["start"], span["start"], span["end"], span["end"]]
         ys += [0.0, 1.0, 1.0, 0.0]
-    xs.append(float(t_end)); ys.append(0.0)
+    # Only extend forward. Closing at a t_end that precedes the last span would
+    # draw the trace backwards over itself at y=0 — the failure above, in its
+    # general form.
+    if float(t_end) > xs[-1]:
+        xs.append(float(t_end)); ys.append(0.0)
     return xs, ys
+
+
+# Equal widths, and they were never the problem. Unequal ones were tried
+# (tone 7 / shock 2.5) while chasing a magenta baseline that turned out to be a
+# zero session extent, and they looked wrong: the fat trace reads as a different
+# kind of object rather than a sibling channel. Overlap at 0 showing only the
+# top trace is expected and fine; where just ONE trace is at 0 its own colour
+# shows, which draw order alone delivers.
+EVENT_LINE_WIDTHS = {"tone": 3, "shock": 3}
 
 
 def _plot_events(fig, row, session, controls):
@@ -284,43 +297,61 @@ def _plot_events(fig, row, session, controls):
     are trying to read, and the tone band duplicated the tone epoch band anyway.
     Colours match the TTL lines in the pyqtdash viewer.
     """
-    trial = session.trial_events
-    params = controls.get("epoch_params")
-    spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
-    t_end = 0.0
-    if session.has_behavior:
-        times = behavior_time(session.behavior_data)
-        t_end = float(times[-1]) if len(times) else 0.0
+    spans = session.event_spans(controls.get("epoch_params"))
+    # Session.extent_s, never a local fallback to 0: a zero t_end makes
+    # _step_series close each trace by running back to the origin at y=0, which
+    # paints a flat line under the pulses across the whole panel. See its
+    # docstring. None means nothing is loaded, so there is nothing to draw past.
+    t_end = session.extent_s or 0.0
 
-    # One trace per axis, so each can carry its own colour-matched title. Both
-    # are 0/1 step functions of identical shape, so colour is the only thing
-    # distinguishing them and it has to be named somewhere. This is how the
-    # motion panel labels mobility against velocity, rather than a legend
-    # floating over the trace.
-    for kind, label, secondary in (("tone_event", "tone", False),
-                                   ("shock_event", "shock", True)):
+    # BOTH traces on ONE axis, as plain SVG Scatter, shock added second so it
+    # draws on top. This panel spent a night two rendering subtleties deep, so
+    # the rule is recorded here: Scattergl traces batch per subplot and can swap
+    # colours between lines of identical shape, and a trace on an *overlaying*
+    # axis composites in its own layer, so "added later" stops meaning "on top".
+    # Two 22-vertex 0/1 steps need neither WebGL nor a second scale. One axis
+    # makes draw order the whole story: where one trace alone sits at 0 its own
+    # colour shows (magenta at 0 under a tone pulse, blue at 0 under a shock),
+    # and where both are at 0, shock — on top — wins.
+    tone_color = config.EVENT_SERIES_COLORS["tone"]
+    shock_color = config.EVENT_SERIES_COLORS["shock"]
+    for kind, label in (("tone_event", "tone"), ("shock_event", "shock")):
         xs, ys = _step_series(spans, kind, t_end)
-        color = config.EVENT_SERIES_COLORS[label]
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=xs, y=ys, mode="lines", name=label,
-                line=dict(color=color, width=1.5),
+                # DIFFERENT WIDTHS, on purpose. Both traces are 0/1 and both
+                # sit at 0 for most of the session, so where they coincide only
+                # the top one is visible and the panel becomes a guessing game
+                # about which colour you are looking at. Drawing tone fat and
+                # shock thin makes the overlap read as a blue band with a
+                # magenta core — both present, neither hidden — while a stretch
+                # where only one is at 0 shows that colour cleanly and at full
+                # width. This is the property the panel is actually read for,
+                # and it does not depend on trace order, axis layering, or
+                # anything else that has bitten this panel before.
+                line=dict(color=config.EVENT_SERIES_COLORS[label],
+                          width=EVENT_LINE_WIDTHS[label]),
                 hovertemplate=f"{label}: %{{y:.0f}}<extra></extra>",
             ),
-            row=row, col=1, secondary_y=secondary,
+            row=row, col=1,
         )
-        # Identical ranges, so the two 0/1 traces sit on one visual scale and a
-        # pulse means the same height whichever axis it belongs to.
-        fig.update_yaxes(
-            title_text=label, title_font=dict(color=color),
-            tickfont=dict(color=color),
-            range=[-0.15, 1.35], fixedrange=True,
-            # Ticks on the left only: both axes are the same 0/1, so a second
-            # set would be noise. The right axis is there to carry a name.
-            tickvals=[0, 1] if not secondary else [],
-            showgrid=not secondary,
-            row=row, col=1, secondary_y=secondary,
-        )
+    fig.update_yaxes(
+        title_text="tone", title_font=dict(color=tone_color),
+        tickfont=dict(color=tone_color), tickvals=[0, 1],
+        range=[-0.15, 1.35], fixedrange=True,
+        row=row, col=1,
+    )
+    # The magenta "shock" mark on the right is an ANNOTATION, not an axis
+    # title: plotly does not render an overlaying axis that owns no trace,
+    # which is how the label vanished the moment the shock trace left it.
+    xref, yref = _axis_refs(fig, row)
+    fig.add_annotation(
+        text="shock", textangle=-90, showarrow=False,
+        xref=f"{xref} domain", yref=f"{yref} domain",
+        x=1.0, xanchor="left", y=0.5, yanchor="middle",
+        font=dict(color=shock_color, size=14),
+    )
 
 
 def _add_epoch_bands(fig, session, controls):

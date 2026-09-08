@@ -241,6 +241,46 @@ def render_neural_metadata(neural_path, behavior_path):
 # ---------------------------------------------------------------------------
 
 @callback(
+    Output("div-no-shock", "style"),
+    Output("toggle-no-shock", "value"),
+    Input("store-neural-path", "data"),
+    Input("store-behavior-path", "data"),
+    Input("store-bank", "data"),
+)
+def render_no_shock(neural_path, behavior_path, bank_index):
+    """Show the control checkbox only where a shock TTL exists, and restore it.
+
+    Open field has no shocks, so it never sees this. Per-bank, like the animal:
+    the two animals in one .pl2 are a control/shocked pair.
+    """
+    if not neural_path:
+        return {"display": "none"}, []
+    session = load_session_from_paths(neural_path, behavior_path or "",
+                                      bank_index=bank_index)
+    if session.trial_events["shocks"] is None:
+        return {"display": "none"}, []
+    saved = load_identity(neural_path, bank_index)["no_shock"]
+    return ({"display": "block", "marginTop": "4px"}, ["on"] if saved else [])
+
+
+@callback(
+    Output("div-identity-status", "children", allow_duplicate=True),
+    Input("toggle-no-shock", "value"),
+    State("store-neural-path", "data"),
+    State("store-bank", "data"),
+    prevent_initial_call=True,
+)
+def save_no_shock(value, neural_path, bank_index):
+    """Persist the control flag beside the .pl2, per bank."""
+    if not neural_path:
+        return no_update
+    saved = load_identity(neural_path, bank_index)
+    save_identity(neural_path, animal=saved["animal"], session=saved["session"],
+                  bank=saved["bank"], no_shock=bool(value))
+    return "Saved." if value else ""
+
+
+@callback(
     Output("input-animal", "options"),
     Output("input-animal", "value"),
     Output("input-session", "value"),
@@ -697,6 +737,7 @@ def update_epoch_overlay(epoch_params, controls, neural_path, behavior_path):
         return no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
+    session.no_shock = bool(controls.get("no_shock"))
     fig, _content_px = plot_session_view(session, {**controls,
                                                    "epoch_params": epoch_params})
     if fig is None:
@@ -723,8 +764,9 @@ def update_epoch_overlay(epoch_params, controls, neural_path, behavior_path):
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
     Input("store-epoch-params", "data"),
+    Input("toggle-no-shock", "value"),
 )
-def render_navigator(neural_path, behavior_path, epoch_params):
+def render_navigator(neural_path, behavior_path, epoch_params, no_shock):
     """Rebuild the strip when the session or the epoch windows change.
 
     Same inputs as `render_epoch_controls`, and deliberately NOT gated on the
@@ -736,6 +778,7 @@ def render_navigator(neural_path, behavior_path, epoch_params):
     if not neural_path and not behavior_path:
         return None
     session = load_session_from_paths(neural_path or "", behavior_path or "")
+    session.no_shock = bool(no_shock)
     return session_navigator.build_strip(session, epoch_params)
 
 
@@ -836,6 +879,7 @@ def _ratio_band(low, high, default):
     Input("input-theta-ratio-high-hi", "value"),
     Input("toggle-epochs", "value"),
     Input("toggle-ttl-pulses", "value"),
+    Input("toggle-no-shock", "value"),
     State("store-epoch-params", "data"),
     State("store-view-range", "data"),
 )
@@ -844,12 +888,17 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                   theta_toggle, theta_low, theta_high, peak_color, peak_markers,
                   peak_dot_size, theta_estimator,
                   ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
-                  epoch_toggle, ttl_toggle, epoch_params,
+                  epoch_toggle, ttl_toggle, no_shock, epoch_params,
                   view_range):
     if not neural_path and not behavior_path:
         return no_update, no_update, no_update, no_update
 
     session = load_session_from_paths(neural_path or "", behavior_path or "")
+    # The checkbox is the live value, not the sidecar: load_session_from_paths is
+    # lru_cached, so anything the loader reads is fixed at first load and ticking
+    # the box later would change nothing on screen. The sidecar only persists it
+    # across loads, via render_no_shock restoring the checkbox.
+    session.no_shock = bool(no_shock)
     # No fallback to channel 0 here. An empty picker means either "nothing ticked"
     # or, on a two-animal .pl2, "no subject chosen yet" — and channel 0 is then the
     # *other* animal's first channel, which is exactly what must never be plotted.
@@ -886,10 +935,14 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
                          else DEFAULT_VIEW_DURATION,
         "show_ttl_pulses": "on" in (ttl_toggle or []),
         "epoch_params": epoch_params,
+        # Carried so update_epoch_overlay can restore it when it
+        # rebuilds; otherwise an epoch edit would bring the shock back.
+        "no_shock": bool(no_shock),
     }
     fig, content_px = plot_session_view(session, controls)
     if fig is None:
         return no_update, no_update, no_update, no_update
+
 
     x0, x1 = view_range or [0, DEFAULT_VIEW_DURATION]
     fig.update_xaxes(range=[x0, x1], autorange=False)
@@ -926,7 +979,7 @@ _viewer_process = None
 _last_handoff_dir = None
 
 
-def _trial_payload(neural_path, behavior_path):
+def _trial_payload(neural_path, behavior_path, no_shock=False):
     """Tone/shock onsets and epoch windows for the viewer, or None.
 
     None for any session without TTLs, which is every open-field recording — the
@@ -935,6 +988,7 @@ def _trial_payload(neural_path, behavior_path):
     if not neural_path or not behavior_path:
         return None
     session = load_session_from_paths(neural_path, behavior_path)
+    session.no_shock = bool(no_shock)
     trial = session.trial_events
     if trial["tones"] is None:
         return None
@@ -942,8 +996,7 @@ def _trial_payload(neural_path, behavior_path):
     end = float(times[-1]) if times is not None and len(times) else None
     built = epochs.build_epochs(trial["tones"], trial["shocks"],
                                 session.epoch_params, end)
-    spans = epochs.event_spans(trial["tones"], trial["shocks"],
-                               session.epoch_params)
+    spans = session.event_spans(session.epoch_params)
     return {
         "tones": [float(x) for x in trial["tones"]],
         "shocks": ([float(x) for x in trial["shocks"]]
@@ -1003,6 +1056,7 @@ def _find_freezeframe_video(metadata, behavior_dir):
     State("radio-theta-peak-color", "value"),
     State("radio-theta-estimator", "value"),
     State("store-view-range", "data"),
+    State("toggle-no-shock", "value"),
     prevent_initial_call=True,
 )
 def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
@@ -1010,7 +1064,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
                   spect_window, spect_step, spect_c, spect_max_freq,
                   theta_toggle, theta_low, theta_high, theta_peak_color,
                   theta_estimator,
-                  view_range):
+                  view_range, no_shock):
     global _viewer_process, _last_handoff_dir
 
     if not behavior_path:
@@ -1151,7 +1205,7 @@ def launch_viewer(n_clicks, neural_path, behavior_path, existing_video_path,
         # viewer only draws them — same deal as the theta peak array. Lets you
         # scrub straight to a trial, which is a navigation question and so
         # belongs here; anything that needs comparing stays in the Session Viewer.
-        "trial": _trial_payload(neural_path, behavior_path),
+        "trial": _trial_payload(neural_path, behavior_path, no_shock),
     }
     with open(Path(handoff_dir) / "handoff.json", "w") as f:
         json.dump(handoff, f)
@@ -1696,6 +1750,7 @@ def export_channel_csv(n_clicks, neural_path, behavior_path):
     State("input-theta-ratio-high-lo", "value"),
     State("input-theta-ratio-high-hi", "value"),
     State("store-epoch-params", "data"),
+    State("toggle-no-shock", "value"),
     prevent_initial_call=True,
 )
 def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
@@ -1704,7 +1759,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
                         spect_window, spect_step, spect_c, spect_max_freq,
                         theta_estimator,
                         ratio_low_lo, ratio_low_hi, ratio_high_lo, ratio_high_hi,
-                        epoch_params):
+                        epoch_params, no_shock):
     """Write the one analysis table — theta channels plus behavior, on a single
     time base — to a CSV of the user's choosing.
 
@@ -1723,6 +1778,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     # Export the windows that are on screen, not config defaults — otherwise the
     # `epoch` column silently disagrees with the bands you tuned it against.
     session.epoch_params = epoch_params
+    session.no_shock = bool(no_shock)
 
     channel_data = {}
     if neural_path:

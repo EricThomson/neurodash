@@ -75,17 +75,17 @@ def test_session_is_canonicalized_and_optional():
 
 def test_identity_round_trip(tmp_path):
     pl2 = tmp_path / "rec.pl2"
-    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None, "no_shock": False}
 
     save_identity(pl2, "  C43-1", "Hab 2")
-    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None}
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None, "no_shock": False}
 
 
 def test_clearing_the_override_falls_back_to_inference(tmp_path):
     pl2 = tmp_path / "rec.pl2"
     save_identity(pl2, "C43-1", "hab2")
     save_identity(pl2, "", "")
-    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None, "no_shock": False}
 
 
 def test_saving_channel_annotations_keeps_the_identity(tmp_path):
@@ -95,7 +95,7 @@ def test_saving_channel_annotations_keeps_the_identity(tmp_path):
     save_channels(pl2, {"pl2_filename": "rec.pl2", "comment": "a note",
                         "exemplar_channel_index": 3, "channels": {}})
 
-    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None}
+    assert load_identity(pl2) == {"animal": "C43-1", "session": "hab2", "bank": None, "no_shock": False}
     saved = json.loads(channel_notes_path(pl2).read_text(encoding="utf-8"))
     assert saved["exemplar_channel_index"] == 3 and saved["comment"] == "a note"
 
@@ -103,13 +103,13 @@ def test_saving_channel_annotations_keeps_the_identity(tmp_path):
 def test_unreadable_notes_file_does_not_raise(tmp_path):
     pl2 = tmp_path / "rec.pl2"
     channel_notes_path(pl2).write_text("{not json", encoding="utf-8")
-    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None}
+    assert load_identity(pl2) == {"animal": "", "session": "", "bank": None, "no_shock": False}
 
 
 def test_identity_without_a_pl2_is_a_no_op():
     """A behavior-only session has nowhere to write; it must not raise."""
     save_identity(None, "AAA", "hab1")
-    assert load_identity(None) == {"animal": "", "session": "", "bank": None}
+    assert load_identity(None) == {"animal": "", "session": "", "bank": None, "no_shock": False}
 
 
 # --- subject bank ---------------------------------------------------------
@@ -126,8 +126,8 @@ def test_bank_round_trips(tmp_path):
     """
     pl2 = tmp_path / "rec.pl2"
     save_identity(pl2, "G20-3", "acquisition", bank=1)
-    assert load_identity(pl2, bank=1) == {"animal": "G20-3",
-                                          "session": "acquisition", "bank": 1}
+    assert load_identity(pl2, bank=1) == {"animal": "G20-3", "session": "acquisition",
+                                          "bank": 1, "no_shock": False}
     assert load_identity(pl2)["session"] == "acquisition"   # session is shared
     assert load_identity(pl2)["bank"] == 1
 

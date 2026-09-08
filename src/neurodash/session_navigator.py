@@ -48,27 +48,13 @@ LABEL_MIN_FRACTION = 0.03
 
 
 def session_extent(session):
-    """How far the session runs, in behavior-clock seconds, or None.
+    """How far the session runs. Thin alias for Session.extent_s.
 
-    The union of what is loaded rather than either file alone: on the
-    acquisition test file Plexon stopped ~34 s before EthoVision did, so the
-    neural extent would cut the strip short of behavior that exists, and a
-    behavior-only session has no neural extent at all.
-
-    Starts at 0 even though neural data can begin a fraction of a second before
-    behavior t=0 (-0.113 s on the acquisition file, to cancel the orphan samples
-    neo prepends). That is 0.009% of the session and invisible at strip scale.
+    Kept as a name because the strip is entirely a function of this number, but
+    the logic lives on Session — `_plot_events` needs the same answer, and the
+    two had drifted apart with a bug on the plot_utils side.
     """
-    ends = []
-    if session.has_behavior:
-        times = behavior_time(session.behavior_data)
-        if len(times):
-            ends.append(float(times[-1]))
-    info = session.lfp_info if session.has_neural else None
-    if info:
-        ends.append(float(info["duration_sec"]) + session.neural_time_offset)
-    ends = [e for e in ends if e > 0]
-    return max(ends) if ends else None
+    return session.extent_s
 
 
 def build_strip(session, epoch_params=None):
@@ -106,7 +92,7 @@ def build_strip(session, epoch_params=None):
     # Shocks only. Tones already read as the start of their own tone segment,
     # whereas the shock falls in the guard band between trace and isi and so has
     # nothing else marking it (epochs.py: "the shock is never inside an epoch").
-    for span in epochs.event_spans(tones, shocks, epoch_params):
+    for span in session.event_spans(epoch_params):
         if span["kind"] != "shock_event":
             continue
         children.append(html.Div(

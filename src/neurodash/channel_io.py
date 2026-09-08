@@ -148,7 +148,7 @@ def load_identity(pl2_path, bank=None):
     of the same answer: *whose* recording is this.
     """
     if not pl2_path:
-        return {"animal": "", "session": "", "bank": None}
+        return {"animal": "", "session": "", "bank": None, "no_shock": False}
     path = channel_notes_path(pl2_path)
     if path.exists():
         try:
@@ -156,10 +156,20 @@ def load_identity(pl2_path, bank=None):
                 data = json.load(f)
             return {"animal": _saved_animal(data, bank),
                     "session": data.get("session", ""),
-                    "bank": data.get("bank")}
+                    "bank": data.get("bank"),
+                    "no_shock": _saved_no_shock(data, bank)}
         except (json.JSONDecodeError, OSError):
             pass
-    return {"animal": "", "session": "", "bank": None}
+    return {"animal": "", "session": "", "bank": None, "no_shock": False}
+
+
+def _saved_no_shock(data, bank):
+    """Whether this subject was a no-shock control. Per bank, like the animal.
+
+    One flag for the whole file would mark both animals of a pair the same, and
+    the pair is the point: one control, one shocked, in a single .pl2.
+    """
+    return bool((data.get("no_shock") or {}).get(str(bank if bank is not None else 0)))
 
 
 def _read_notes(pl2_path):
@@ -201,7 +211,7 @@ def _saved_animal(data, bank):
     return ""
 
 
-def save_identity(pl2_path, animal="", session="", bank=None):
+def save_identity(pl2_path, animal="", session="", bank=None, no_shock=None):
     """Persist animal/session/bank overrides without disturbing the annotations.
 
     Read-modify-write rather than rebuilding the record, so this can't clobber
@@ -232,6 +242,10 @@ def save_identity(pl2_path, animal="", session="", bank=None):
         data["animal_overrides"] = per_bank
         # Ambiguous once there is more than one animal — the dict is the answer.
         data["animal_override"] = ""
+    if no_shock is not None:
+        flags = dict(data.get("no_shock") or {})
+        flags[str(bank if bank is not None else 0)] = bool(no_shock)
+        data["no_shock"] = flags
     # Session is deliberately NOT per bank: both animals were run in the same
     # recording, so they share it.
     data["session"] = canonical_id(session, lowercase=True)
@@ -332,6 +346,8 @@ def save_channels(pl2_path, channel_data):
     # of a two-animal file onto whichever bank happened to be selected.
     if existing_raw.get("animal_overrides"):
         channel_data["animal_overrides"] = existing_raw["animal_overrides"]
+    if existing_raw.get("no_shock"):
+        channel_data["no_shock"] = existing_raw["no_shock"]
     channel_data["session"] = existing["session"]
     channel_data["bank"] = existing["bank"]
     with open(channel_notes_path(pl2_path), "w") as f:

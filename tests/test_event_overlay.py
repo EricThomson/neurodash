@@ -60,6 +60,7 @@ class FakeSession(Session):
         self.lfp_signal_index = 0
         self.bank_index = None
         self.epoch_params = None
+        self.no_shock = False
 
     @property
     def analog_fragments(self):
@@ -141,3 +142,87 @@ def test_only_session_derives_the_behavior_anchor():
         f"{offenders} calls behavior_start_in_pl2 directly — use "
         f"session.behavior_anchor, or the fragments argument will eventually be "
         f"forgotten and the answer will be ~1 s out without failing")
+
+
+# --- no-shock controls ----------------------------------------------------
+# The shock TTL fires rig-wide but only one box delivers it, so a control's
+# event series was reporting a shock it never received. Nothing in any file says
+# which box was wired; the experimenter checks the box in the sidebar.
+
+def test_a_control_has_no_shock_spans():
+    session = FakeSession()
+    session.no_shock = True
+    kinds = {s["kind"] for s in session.event_spans(None)}
+    assert kinds == {"tone_event"}, "shock spans survived for a control"
+
+
+def test_the_tone_is_untouched_for_a_control():
+    """Both boxes hear the tone; only the shock is box-wired."""
+    session = FakeSession()
+    tones_before = [s for s in session.event_spans(None)
+                    if s["kind"] == "tone_event"]
+    session.no_shock = True
+    tones_after = [s for s in session.event_spans(None)
+                   if s["kind"] == "tone_event"]
+    assert tones_before == tones_after
+
+
+def test_epochs_are_untouched_for_a_control():
+    """trace and isi are protocol time windows, and are exactly what a control
+    is compared against — they must not vanish with the shock."""
+    from neurodash import epochs as epochs_module
+
+    session = FakeSession()
+    trial = session.trial_events
+    before = epochs_module.build_epochs(trial["tones"], trial["shocks"])
+    session.no_shock = True
+    after = epochs_module.build_epochs(trial["tones"], trial["shocks"])
+    assert before == after
+    assert {e["kind"] for e in after} >= {"trace", "isi"}
+
+
+def test_the_ttl_overlay_is_untouched_for_a_control():
+    """The TTL layer shows what the RIG did, not what the animal got."""
+    session = FakeSession()
+    shocked = panel()
+    plot_utils._add_ttl_pulses(shocked, session, {"show_ttl_pulses": True})
+    session.no_shock = True
+    control = panel()
+    plot_utils._add_ttl_pulses(control, session, {"show_ttl_pulses": True})
+    assert ([s.x0 for s in control.layout.shapes]
+            == [s.x0 for s in shocked.layout.shapes])
+
+
+# --- the events panel must not close its traces backwards -----------------
+# Found only from a screenshot, after hours: with a .pl2 loaded and NO behavior
+# file, `_plot_events` computed t_end = 0.0, and `_step_series` closes every
+# trace with a vertex at t_end. So each trace ran BACKWARDS from its last pulse
+# to the origin at y=0, laying a flat line across the whole panel. Shock draws
+# second, so its copy sat on top and the baseline read magenta everywhere —
+# including inside the shock's own box, where the tone should show. Loading a
+# behavior file gave a real t_end and hid it completely.
+
+def test_step_series_never_closes_behind_its_last_span():
+    spans = [{"kind": "shock_event", "start": 200.0, "end": 202.0}]
+    xs, ys = plot_utils._step_series(spans, "shock_event", t_end=0.0)
+    assert xs == sorted(xs), (
+        f"trace runs backwards: {xs}. A closing vertex before the last span "
+        f"draws a flat line back over the whole panel at y=0.")
+    assert xs[-1] >= 202.0
+
+
+def test_step_series_still_extends_to_a_real_end():
+    spans = [{"kind": "shock_event", "start": 200.0, "end": 202.0}]
+    xs, ys = plot_utils._step_series(spans, "shock_event", t_end=1291.0)
+    assert xs[-1] == 1291.0 and ys[-1] == 0.0
+
+
+def test_a_neural_only_session_still_has_an_extent():
+    """The zero that caused it. Without behavior the extent comes from the LFP."""
+    session = FakeSession()
+    session.analog_signal_summaries = [{
+        "duration_sec": 1290.117, "channel_labels": ["FP01"],
+        "sampling_rate_hz": 1000.0}]
+    session.block = object()
+    assert session.has_behavior is False
+    assert session.extent_s is not None and session.extent_s > 1000.0

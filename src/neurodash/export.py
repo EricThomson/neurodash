@@ -97,7 +97,7 @@ def _freezeframe_columns(session, times, step):
         params = session.epoch_params
         built = epochs.build_epochs(trial["tones"], trial["shocks"], params,
                                     float(t_behav[-1]) if len(t_behav) else None)
-        spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
+        spans = session.event_spans(params)
         columns["epoch"] = epochs.epoch_labels(grid, built)
         columns["tone"] = epochs.event_mask(grid, spans, "tone_event")
         columns["shock"] = epochs.event_mask(grid, spans, "shock_event")

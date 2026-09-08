@@ -135,6 +135,25 @@ def _left_sidebar():
                               "check your animal's box in the session notes or the "
                               "video filename.",
                     ),
+                    # Acquisition only — hidden unless the session has shock TTLs,
+                    # the same rule the Epochs section follows. Unchecked is the
+                    # protocol default: in trace conditioning the animal IS
+                    # shocked, and the no-shock control is the deliberate
+                    # exception the experimenter sets.
+                    html.Div(
+                        dcc.Checklist(
+                            id="toggle-no-shock",
+                            options=[{"label": " No shock", "value": "on"}],
+                            value=[],
+                            style={"fontSize": "0.85em"},
+                        ),
+                        id="div-no-shock",
+                        style={"display": "none", "marginTop": "4px"},
+                        title="This animal's box was not wired to deliver the "
+                              "shock. The shock TTL still fired for the rig, so "
+                              "it keeps its epochs and its TTL marks, but the "
+                              "shock event reads zero.",
+                    ),
                     html.Button("Edit", id="btn-edit-identity", n_clicks=0,
                                 style={"marginTop": "5px", "fontSize": "0.8em"},
                                 title="Correct the animal or session label."),
