@@ -139,6 +139,11 @@ def fake_session(labels, bank_index=None):
     }]
     s.lfp_signal_index = 0
     s.bank_index = bank_index
+    # A real Session always has these; the double skips __init__, so set the
+    # "nothing loaded" values explicitly rather than leaving attributes missing.
+    s.pl2_path = None
+    s.behavior_path = None
+    s.behavior_metadata = None
     return s
 
 
@@ -222,10 +227,10 @@ def test_a_saved_override_wins_over_inference():
 
     saved = {"animal": "G20-3", "session": "acquisition", "bank": 1}
     original = channel_io.load_identity
-    channel_io.load_identity = lambda _path: saved
+    channel_io.load_identity = lambda _path, _bank=None: saved
     try:
         import neurodash.session as session_module
-        session_module.load_identity = lambda _path: saved
+        session_module.load_identity = lambda _path, _bank=None: saved
         assert s.animal_id == "G20-3"      # the correction the user typed
     finally:
         channel_io.load_identity = original
@@ -238,7 +243,7 @@ def test_a_blank_override_falls_back_to_inference():
     s.pl2_path = "/data/170505_open_field_theta_FC33-4.pl2"
     s.behavior_metadata = None
     original = session_module.load_identity
-    session_module.load_identity = lambda _p: {"animal": "", "session": "", "bank": None}
+    session_module.load_identity = lambda _p, _b=None: {"animal": "", "session": "", "bank": None}
     try:
         assert s.animal_id == "FC33-4"
     finally:
@@ -270,8 +275,66 @@ def test_naming_does_not_leak_into_the_authoritative_animal_id():
     s.behavior_metadata = None
     import neurodash.session as session_module
     original = session_module.load_identity
-    session_module.load_identity = lambda _p: {"animal": "", "session": "", "bank": 1}
+    session_module.load_identity = lambda _p, _b=None: {"animal": "", "session": "", "bank": 1}
     try:
         assert s.animal_id == ""
     finally:
         session_module.load_identity = original
+
+
+# --- naming one animal of a two-animal recording --------------------------
+# Some FreezeFrame exports name the BOX where others name the animal, so the
+# behavior file's contents can identify nothing. The recording still does, twice
+# over: the .pl2 filename lists its animals in bank order, and the behavior
+# FILENAME usually contains the animal outright. Neither is trusted alone.
+
+def two_animal_session(bank_index, behavior_name=None, box=None, animal=None):
+    s = fake_session(TWO_ANIMALS, bank_index=bank_index)
+    s.pl2_path = "/data/acquisition G16-1 and G20-3.pl2"
+    s.behavior_path = f"/data/{behavior_name}" if behavior_name else None
+    s.behavior_metadata = {}
+    if box is not None:
+        s.behavior_metadata["Box"] = f"Box: Box {box}"
+    if animal is not None:
+        s.behavior_metadata["Animal"] = animal
+    return s
+
+
+def test_behavior_filename_names_the_animal():
+    s = two_animal_session(0, behavior_name="G16-1 Raw Aquisition.csv")
+    assert s.animal_id == "G16-1"
+
+
+def test_stated_box_names_the_animal():
+    """Box N -> bank N is confirmed rig wiring, so the box is enough on its own."""
+    s = two_animal_session(0, behavior_name="raw acquisition.csv", box=1)
+    assert s.animal_id == "G16-1"
+
+
+def test_nothing_corroborating_leaves_it_blank():
+    """The .pl2 filename alone is a convention, not evidence."""
+    s = two_animal_session(0, behavior_name="raw acquisition.csv")
+    assert s.animal_id == ""
+
+
+def test_behavior_file_for_the_other_animal_is_refused():
+    """Wrong behavior file for the selected channels: blank, never a name."""
+    assert two_animal_session(1, behavior_name="G16-1 Raw Aquisition.csv").animal_id == ""
+    assert two_animal_session(1, behavior_name="raw.csv", box=1).animal_id == ""
+
+
+def test_a_header_animal_from_the_other_bank_is_refused():
+    """The header normally wins, but not against the recording itself.
+
+    G20-3's file paired with G16-1's channels would otherwise label G16-1's
+    ephys `G20_3` — silently, and in every export.
+    """
+    s = two_animal_session(0, behavior_name="G20-3 Raw Aquisition.csv",
+                           animal="G20_3")
+    assert s.animal_id == ""
+
+
+def test_punctuation_does_not_defeat_the_check():
+    """The raw CSV writes G20_3 where the .pl2 writes G20-3."""
+    s = two_animal_session(0, animal="G20_3")
+    assert s.animal_id == ""

@@ -178,37 +178,15 @@ EPOCH_BAND_OPACITY = 0.10
 # pyqtgraph via mkPen. A tone/shock color hardcoded anywhere else is a bug (DRY).
 EVENT_SERIES_COLORS = {"tone": "#5a8cff", "shock": "#ff00ff"}
 
-# Alignment self-check. With no behavior-onset pulse anywhere, the neural/behavior
-# offset is anchored on the END of both recordings, so anything that changes the
-# behavior file's duration shifts everything silently. The check re-derives the
-# answer from the animal's startle: the largest motion spike near each shock TTL.
-# Tolerance is generous because the residual is the startle *response* lagging the
-# TTL (0.10-0.60 s measured, plus 33 ms frame binning), not clock error — this is
-# meant to catch gross failure, not to measure latency.
-# The startle window, relative to the shock TTL. Asymmetric on purpose: the
-# response *follows* the shock, so looking backward only invites false matches on
-# ordinary movement. It spans the 2 s shock plus margin. A symmetric +/-1.5 s
-# window was used while the behavior clock was mis-anchored, and it stopped
-# fitting once the response moved to its true position (+0.17 to +2.00 s).
-ALIGNMENT_WINDOW_S = (-0.3, 2.6)
-ALIGNMENT_TOLERANCE_S = 1.5   # legacy symmetric width, still used for reporting
-# How big a Motion Index value has to be, as a percentile of the session, to count
-# as a startle. The five shock responses on the test file are 4798-7810 against a
-# 99.9th percentile of 3623 and a median of 79, so they clear this comfortably
-# while ordinary movement does not.
+# Alignment self-check. There is no behavior-onset pulse anywhere, so the
+# neural/behavior offset is anchored on the behavior file's own duration, and
+# anything that changes that duration shifts every derived time silently.
 #
-# 99.9 rather than 99.5 because of the false-match rate. The test window is 3 s
-# wide (+/- the tolerance) = ~90 frames at 30 fps, so the chance that ordinary
-# motion clears the bar somewhere in it is 1-(1-p)^90: about 36% at the 99.5th
-# percentile but only ~9% at the 99.9th. That matters for the no-shock control
-# animals, which have no startle at all and would otherwise match one or two
-# shocks by luck and be reported as misaligned.
-ALIGNMENT_SPIKE_PERCENTILE = 99.9
-
-# Below this many matching shocks the result is ambiguous rather than a failure:
-# too few to distinguish "this animal was never shocked" from "the alignment is
-# wrong". Above it, startles demonstrably exist, so the ones that miss are real.
-ALIGNMENT_MIN_CONFIDENT_MATCHES = 2
+# A startle check used to sit here too — did Motion Index jump at each shock TTL?
+# Removed Sep 2026 (Eric): the shock TTL fires rig-wide but only Box 2 delivers
+# it, so every no-shock control reported "0 of 5 startles found", which is both
+# correct and useless. Its tuning constants went with it; the reasoning is kept
+# in alignment.check_alignment's docstring so the failed designs are not retried.
 
 # The behavior file's stated 'Run Time' must match how far its data actually runs.
 # This is the direct test for the failure end-anchoring is exposed to — a trimmed

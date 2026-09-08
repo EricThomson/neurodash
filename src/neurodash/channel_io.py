@@ -132,8 +132,11 @@ def resolve_session_name(behavior_metadata=None):
     return canonical_id(get_session_name(behavior_metadata), lowercase=True)
 
 
-def load_identity(pl2_path):
+def load_identity(pl2_path, bank=None):
     """Saved animal/session/bank overrides for a recording, or blanks.
+
+    ``bank`` selects whose animal name to return on a .pl2 holding two animals.
+    Omit it for single-animal files, and when asking only for the saved bank.
 
     Kept in the annotations file beside the .pl2 — it already carried `animal`, and
     the pl2 is the anchor for exports. A behavior-only session therefore can't
@@ -151,12 +154,51 @@ def load_identity(pl2_path):
         try:
             with open(path) as f:
                 data = json.load(f)
-            return {"animal": data.get("animal_override", ""),
+            return {"animal": _saved_animal(data, bank),
                     "session": data.get("session", ""),
                     "bank": data.get("bank")}
         except (json.JSONDecodeError, OSError):
             pass
     return {"animal": "", "session": "", "bank": None}
+
+
+def _read_notes(pl2_path):
+    """The companion file's raw contents, or {} if absent/unreadable."""
+    if not pl2_path:
+        return {}
+    path = channel_notes_path(pl2_path)
+    if not path.exists():
+        return {}
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _saved_animal(data, bank):
+    """The override for one subject of a recording.
+
+    A two-animal .pl2 has two animals, so a single `animal_override` beside it is
+    ambiguous — and worse than ambiguous in practice: it was written while one
+    bank was selected, and reading it back under the other labels that animal's
+    ephys with its neighbour's name. Exactly the mix-up the bank filtering exists
+    to prevent, one field over. Multi-animal files therefore key the override by
+    bank; single-animal files keep the plain scalar.
+
+    Sidecars written before this hold a scalar plus the bank that was active when
+    it was typed, which is enough to place it: the scalar is honoured for THAT
+    bank and no other, so the name already entered survives and the other animal
+    correctly comes back blank.
+    """
+    if bank is None:
+        return data.get("animal_override", "")
+    per_bank = data.get("animal_overrides") or {}
+    if per_bank:
+        return per_bank.get(str(bank), "")
+    if data.get("bank") == bank:
+        return data.get("animal_override", "")
+    return ""
 
 
 def save_identity(pl2_path, animal="", session="", bank=None):
@@ -176,7 +218,22 @@ def save_identity(pl2_path, animal="", session="", bank=None):
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             data = {}
-    data["animal_override"] = canonical_id(animal)
+    if bank is None:
+        data["animal_override"] = canonical_id(animal)
+    else:
+        # Per-bank on a multi-animal file. The legacy scalar is moved into the
+        # bank it was typed under first, so an existing name is not lost and does
+        # not leak onto the other animal.
+        per_bank = dict(data.get("animal_overrides") or {})
+        legacy_bank, legacy_name = data.get("bank"), data.get("animal_override")
+        if not per_bank and legacy_name and legacy_bank is not None:
+            per_bank[str(legacy_bank)] = legacy_name
+        per_bank[str(int(bank))] = canonical_id(animal)
+        data["animal_overrides"] = per_bank
+        # Ambiguous once there is more than one animal — the dict is the answer.
+        data["animal_override"] = ""
+    # Session is deliberately NOT per bank: both animals were run in the same
+    # recording, so they share it.
     data["session"] = canonical_id(session, lowercase=True)
     data["bank"] = None if bank is None else int(bank)
     data["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -265,11 +322,16 @@ def save_channels(pl2_path, channel_data):
     whole file from a record that doesn't contain them, so rating a channel would
     otherwise silently erase the animal/session the user typed in the sidebar.
     """
+    existing_raw = _read_notes(pl2_path)
     existing = load_identity(pl2_path)
     channel_data = dict(channel_data)
     channel_data["schema_version"] = SCHEMA_VERSION
     channel_data["updated_at"] = datetime.now().isoformat(timespec="seconds")
     channel_data["animal_override"] = existing["animal"]
+    # Carried verbatim: rebuilding it from `existing` would collapse both animals
+    # of a two-animal file onto whichever bank happened to be selected.
+    if existing_raw.get("animal_overrides"):
+        channel_data["animal_overrides"] = existing_raw["animal_overrides"]
     channel_data["session"] = existing["session"]
     channel_data["bank"] = existing["bank"]
     with open(channel_notes_path(pl2_path), "w") as f:

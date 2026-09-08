@@ -22,7 +22,10 @@ from neurodash.neural_io import (
 )
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import load_behavior_file
-from neurodash.channel_io import load_identity, resolve_animal_id
+from neurodash import freezeframe_io
+from neurodash.channel_io import (
+    load_identity, parse_animal_ids, resolve_animal_id,
+)
 
 
 class Session:
@@ -193,11 +196,78 @@ class Session:
         behavior file says (see resolve_animal_id's filename_fallback).
         """
         if self.pl2_path:
-            override = load_identity(self.pl2_path)["animal"]
+            override = load_identity(self.pl2_path, self.bank_index)["animal"]
             if override:
                 return override
-        return resolve_animal_id(self.pl2_path, self.behavior_metadata,
-                                 filename_fallback=not self.is_multi_animal)
+        inferred = resolve_animal_id(self.pl2_path, self.behavior_metadata,
+                                     filename_fallback=not self.is_multi_animal)
+        if inferred and self._names_another_bank(inferred):
+            return ""
+        return inferred or self._animal_from_recording()
+
+    def _names_another_bank(self, name):
+        """True when `name` is this recording's OTHER animal.
+
+        The behavior file's own header normally settles the animal, and on a
+        single-animal file it should. On a two-animal .pl2 it can also be the
+        wrong file for the channel group selected, and then it is worse than no
+        answer: it labels one animal's ephys with its neighbour's name, silently.
+        So the header still wins, but not against the recording itself.
+
+        Punctuation is folded for the comparison only, never in storage: the raw
+        CSV writes `G20_3` where the .pl2 filename and the 1-s xlsx write
+        `G20-3`, and a literal match would miss it.
+        """
+        names = parse_animal_ids(self.pl2_path)
+        if self.bank_index is None or self.bank_index >= len(names):
+            return False
+        fold = lambda text: text.strip().lower().replace("_", "-")
+        mine = fold(names[self.bank_index])
+        others = {fold(n) for i, n in enumerate(names) if i != self.bank_index}
+        return fold(name) in others - {mine}
+
+    def _animal_from_recording(self):
+        """Name this animal when the behavior file's contents don't.
+
+        Some FreezeFrame exports name the BOX on the row where others name the
+        animal ("Box: Box 1"), so the usual source is simply absent. But the
+        recording still identifies the animal twice over, and this uses both.
+
+        The candidate is `parse_animal_ids(pl2)[bank]` — the .pl2 filename lists
+        its animals in bank order. A candidate alone is only a convention, so it
+        is returned ONLY if something corroborates it:
+
+        * **the behavior filename**, which usually contains the animal outright
+          (`G16-1 Raw Aquisition.csv`). Direct evidence, and it is matched
+          against the names the .pl2 already offers rather than by carving a
+          token out of the filename — so no rule about which token holds the ID,
+          and no chance of inventing a name that appears nowhere.
+        * **the stated box**, via the confirmed Box N -> bank N rig wiring
+          (Korey, plus the 2026 session notes).
+
+        Either alone is enough; both agree here. And anything pointing at the
+        OTHER animal vetoes the answer, because a behavior file paired with the
+        wrong channel group is exactly the mix-up the bank filtering exists to
+        prevent — one field over.
+        """
+        if not self.pl2_path or self.bank_index is None:
+            return ""
+        names = parse_animal_ids(self.pl2_path)
+        if self.bank_index >= len(names):
+            return ""
+        candidate = names[self.bank_index]
+
+        stem = Path(self.behavior_path).stem.lower() if self.behavior_path else ""
+        box = freezeframe_io.box_number(self.behavior_metadata)
+
+        others = [n for i, n in enumerate(names) if i != self.bank_index]
+        if any(other.lower() in stem for other in others):
+            return ""                       # behavior file names another animal
+        if box is not None and box - 1 != self.bank_index:
+            return ""                       # behavior file states another box
+
+        corroborated = (candidate.lower() in stem) or (box == self.bank_index + 1)
+        return candidate if corroborated else ""
 
     def channel_options(self):
         """(index, label) pairs for the channels this session may show or export.

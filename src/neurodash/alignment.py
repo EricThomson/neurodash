@@ -27,7 +27,7 @@ import numpy as np
 
 from neurodash import config
 from neurodash.behavior_io import behavior_time
-from neurodash.freezeframe_io import MOTION_COLUMN, run_time_seconds
+from neurodash.freezeframe_io import run_time_seconds
 
 
 def _first(events, names):
@@ -142,105 +142,53 @@ def neural_time_offset(events, behavior_metadata, segment, neural_duration=None,
 
 def check_alignment(events, behavior_metadata, behavior_data, segment=None,
                     fragments=None):
-    """Re-derive the offset from the animal's startle, and report disagreement.
+    """Report the one alignment failure this can prove: a truncated behavior file.
 
-    A shock makes the animal jump, so the largest isolated spikes in ``Motion
-    Index`` must land on the shock TTLs. On the acquisition file those spikes are
-    3-5x anything else in the session (4798-7810 against a next tier of ~1500), so
-    they are unambiguous, and they match the end-anchored prediction to within
-    0.10-0.60 s on all five trials.
+    The anchor is the behavior file's own duration, so if its stated `Run Time`
+    disagrees with how far its data actually runs, every derived neural time is
+    shifted by that difference. Direct, unambiguous, and it works on every animal.
 
-    That residual is the startle *response* lagging the TTL, plus 33 ms frame
-    binning — it is not clock error, so do not "improve" the alignment by fitting
-    to the motion peaks. The check is for gross failure, which is what a truncated
-    or trimmed behavior file produces.
+    **The startle check was removed (Eric, Sep 2026).** It asked whether a jump in
+    Motion Index happened at each shock TTL. That is only meaningful for shocked
+    animals, and the shock TTL fires rig-wide while only one box delivers it — on
+    acquisition day the Box 1 animals are no-shock controls, so roughly half of
+    all sessions could only ever report "0 of 5 startles found, either this animal
+    was not shocked or the files don't belong together". Correct, and useless: a
+    message that fires on every control animal is noise the user learns to ignore,
+    which is worse than no check.
 
-    Returns ``(ok, message)``. ``ok`` is True when there is nothing to check
-    against (no shocks, no motion column, non-FreezeFrame data) — this reports
-    problems it can prove, not absence of evidence.
+    Two things worth not relearning, since the code is gone:
+
+    * Ranking the session's biggest spikes and matching them to TTLs FAILS an
+      intact file — the animal moves hard for its own reasons, and a 6145 spike at
+      221.0 s outranked three of the five real shock responses.
+    * Taking the largest peak near each prediction caps the error the check can
+      report at the search-window width, so a 60 s truncation scored 1.99 s.
+
+    The real instrument for the neural<->behavior clock is the shock-triggered
+    motion average, and for the pl2-internal clock it is artifact causality; both
+    are run by hand, in sandbox. See sandbox/docs/acquisition_timing_issues.md.
+
+    Returns ``(ok, message)``. ``ok`` is True when there is nothing to check —
+    this reports problems it can prove, not absence of evidence.
     """
-    shocks = shock_times(events)
-    anchor = behavior_start_in_pl2(events, behavior_metadata, segment, fragments)
-    if shocks is None or anchor is None or behavior_data is None:
-        return True, ""
-    if MOTION_COLUMN not in behavior_data.columns:
+    if behavior_data is None:
         return True, ""
 
-    predicted = np.asarray(shocks, dtype=float) - anchor
-    times = behavior_time(behavior_data)
-    motion = behavior_data[MOTION_COLUMN].to_numpy(dtype=float)
-
-    # Checked first, and separately from the startle, because it is the *direct*
-    # test of the thing end-anchoring is vulnerable to: the anchor is
-    # `stop marker - Run Time`, so if Run Time disagrees with how far the data
-    # actually runs, every derived time is shifted by that difference. It is also
-    # unambiguous, which the startle test is not — so it still works on the
-    # no-shock control animals, where there is no startle to look for.
     stated = run_time_seconds(behavior_metadata)
+    times = behavior_time(behavior_data)
     actual = float(times[-1]) if len(times) else None
-    if stated is not None and actual is not None:
-        drift = actual - stated
-        if abs(drift) > config.ALIGNMENT_DURATION_TOLERANCE_S:
-            return False, (
-                f"The behavior file says it ran {stated:.1f} s but its data runs to "
-                f"{actual:.1f} s ({drift:+.1f} s). Alignment is anchored on "
-                f"'Run Time', so every neural time is shifted by that much — the "
-                f"export is probably truncated or trimmed.")
+    if stated is None or actual is None:
+        return True, ""
 
-    # Ask whether a startle happens AT each shock TTL, rather than whether the
-    # session's biggest spikes happen to be the shocks. Both alternatives were
-    # tried and are worse:
-    #
-    #   - Largest-peak-near-each-prediction caps the error the check can report at
-    #     the search-window width, so a 60 s truncation scored 1.99 s — barely
-    #     distinguishable from a good file.
-    #   - Rank the session's top spikes and match them to TTLs: the animal moves
-    #     hard for its own reasons. This file has a 6145 spike at 221.0 s, bigger
-    #     than three of the five shock responses, so the real shock at 644.9 s
-    #     falls out of the top five and an intact file fails.
-    #
-    # A threshold instead of a ranking: the shock responses are 4798-7810 against
-    # a 99.9th percentile of 3623, so all five clear it, while a misaligned window
-    # lands on ordinary motion (median 79, 99th percentile 1033).
-    threshold = float(np.nanpercentile(motion, config.ALIGNMENT_SPIKE_PERCENTILE))
-    matched, worst_time = 0, None
-    lo, hi = config.ALIGNMENT_WINDOW_S
-    for t in predicted:
-        # Asymmetric: the startle follows the shock. Searching backward as well
-        # only invites false matches on ordinary movement, and the window has to
-        # span the 2 s shock — the response runs +0.17 to +2.00 s on the test
-        # file. A symmetric +/-1.5 s window fitted the *mis-anchored* clock and
-        # stopped fitting once the anchor was corrected.
-        window = (times >= t + lo) & (times <= t + hi)
-        if window.any() and np.nanmax(motion[window]) >= threshold:
-            matched += 1
-        elif worst_time is None:
-            worst_time = float(t)
-
-    # None at all is ambiguous, and saying "misaligned" would be wrong half the
-    # time. The shock TTL fires for the whole rig, but only one box is wired to
-    # deliver it: on acquisition day the Box 1 animals are **no-shock controls**
-    # (confirmed against the lab's session notes, where Box 1 is "No Shock" and
-    # Box 2 "Shock" for every pair). A control animal has no startle to find, so
-    # a confident failure here would condemn a perfectly good file.
-    #
-    # A *partial* match is different — it means startles exist, so the animal was
-    # shocked, and some of them landing off the TTLs is real misalignment.
-    if matched < config.ALIGNMENT_MIN_CONFIDENT_MATCHES:
+    drift = actual - stated
+    if abs(drift) > config.ALIGNMENT_DURATION_TOLERANCE_S:
         return False, (
-            f"Startle found at only {matched} of {len(predicted)} shock TTLs. "
-            f"Either this animal was not shocked (the no-shock control box), in "
-            f"which case the alignment cannot be checked this way, or the neural "
-            f"and behavior files do not belong together.")
-    if matched < len(predicted):
-        return False, (
-            f"Only {matched} of {len(predicted)} shock TTLs coincide with a startle "
-            f"in Motion Index (first miss at {worst_time:.1f} s). The neural and "
-            f"behavior files may not belong together, or the behavior export may be "
-            f"truncated — alignment is anchored on the end of both recordings, so a "
-            f"changed duration shifts everything.")
-    return True, (f"Alignment checked: all {len(predicted)} shock TTLs coincide "
-                  f"with a startle.")
+            f"The behavior file says it ran {stated:.1f} s but its data runs to "
+            f"{actual:.1f} s ({drift:+.1f} s). Alignment is anchored on "
+            f"'Run Time', so every neural time is shifted by that much — the "
+            f"export is probably truncated or trimmed.")
+    return True, ""
 
 
 def trial_structure(events, anchor):

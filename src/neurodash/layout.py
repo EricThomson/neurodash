@@ -86,13 +86,16 @@ def _left_sidebar():
                     html.Div(
                         [
                             html.Label("Animal", style=_IDENTITY_LABEL),
-                            dcc.Input(id="input-animal", type="text", disabled=True,
-                                      debounce=True, style=_IDENTITY_INPUT),
+                            dcc.Dropdown(id="input-animal", options=[], value=None,
+                                         placeholder="Select…", clearable=False,
+                                         style={"flex": 1, "fontSize": "0.85em"}),
                         ],
                         style={"display": "flex", "alignItems": "center"},
-                        title="Animal ID. Inferred from the behavior file, else the "
-                              ".pl2 filename — but left blank when the .pl2 holds "
-                              "two animals, since the filename then names both.",
+                        title="Animal ID. Options are the animals named in the "
+                              "filenames. Pick your animal here and its channels "
+                              "in Channels below — the two are independent, "
+                              "because which animal is on which headstage is in "
+                              "your notes, not in any file.",
                     ),
                     html.Div(
                         [

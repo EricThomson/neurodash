@@ -25,6 +25,7 @@ means it provides no bridge to the neural clock — the pl2's TTL events carry t
 alignment instead.
 """
 
+import csv
 import re
 
 import numpy as np
@@ -71,11 +72,18 @@ def load_freezeframe_file(path):
       - 'Min Freeze Duration (frames)' / '(seconds)' — the bout criterion, which
         the preamble states twice in different units on one row.
     """
-    raw = pd.read_csv(path, header=None, dtype=str, encoding="utf-8-sig")
+    raw = _read_rows(path)
 
     header_row = _find_header_row(raw)
     metadata = _parse_preamble(raw, header_row)
-    metadata["Animal"] = _parse_animal(raw, header_row)
+    subject = _parse_subject(raw, header_row)
+    # Some exports name the animal on that row, others name the BOX. A box is
+    # not an animal, and guessing would be worse than blank: the behavior file
+    # wins in resolve_animal_id, so "Box: Box 1" would become the exported animal
+    # id for a real recording. Left None instead, for a human to fill in — the
+    # same rule a multi-animal .pl2 and a missing Session already follow.
+    metadata["Animal"] = None if _is_box_label(subject) else subject
+    metadata["Box"] = subject if _is_box_label(subject) else None
 
     names = [str(v).strip() if v is not None and str(v) != "nan" else ""
              for v in raw.iloc[header_row].tolist()]
@@ -136,16 +144,58 @@ def _parse_preamble(raw, header_row):
     return metadata
 
 
-def _parse_animal(raw, header_row):
-    """The animal name, which sits alone on the row above the column headers."""
+def _read_rows(path):
+    """The file as a padded table of strings.
+
+    Not `pd.read_csv`: two FreezeFrame exporters are in the wild and only one
+    pads its preamble to the table's width. The other writes ragged rows (2, 3
+    and 5 fields against the data's 8) and quotes its values, and pandas infers
+    the column count from the FIRST row, so it raises a tokenizing error on line
+    2 before reaching any data. Reading with the csv module and padding to the
+    widest row accepts both.
+    """
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.reader(handle))
+    if not rows:
+        raise ValueError(f"{path} is empty — not a FreezeFrame export.")
+    width = max(len(row) for row in rows)
+    return pd.DataFrame([row + [None] * (width - len(row)) for row in rows],
+                        dtype=object)
+
+
+def _parse_subject(raw, header_row):
+    """Whatever sits alone on the row above the column headers.
+
+    An animal name in one exporter ("G20_3"), a box label in another
+    ("Box: Box 1"). Returned as written; the caller decides which it is.
+    """
     for i in range(header_row - 1, -1, -1):
         row = raw.iloc[i].tolist()
         if not _blank(row[0]):
-            break  # back into the preamble — no animal row
+            break  # back into the preamble — no subject row
         values = [str(v).strip() for v in row if not _blank(v)]
         if values:
             return values[0]
     return None
+
+
+def _is_box_label(value):
+    """True for 'Box: Box 1' and friends — a chamber, not an animal."""
+    return bool(value) and re.match(r"^\s*box\b", str(value), re.IGNORECASE)
+
+
+def box_number(metadata):
+    """Which chamber this recording came from, as an int, or None.
+
+    Only some exports state it, on the row where others name the animal
+    ("Box: Box 1"). Worth reading because the box is a real experimental fact:
+    per the lab's session notes Box 1 is the no-shock control and Box 2 is
+    shocked, and the rig wiring is Box N -> channel bank N.
+    """
+    if not metadata:
+        return None
+    match = re.search(r"(\d+)", str(metadata.get("Box") or ""))
+    return int(match.group(1)) if match else None
 
 
 def _blank(value):

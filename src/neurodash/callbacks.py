@@ -58,6 +58,16 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 # File browse callbacks
 # ---------------------------------------------------------------------------
 
+def _bank_option_label(names, index, bank):
+    """One channel-group option: box and channel range, both facts about the file.
+
+    No animal name: the animal is chosen in its own dropdown. The two are
+    deliberately decoupled, because which animal sits on which headstage is in
+    the lab's notes, not in any file, so only the user can pair them.
+    """
+    return f"Box {index + 1} · {bank['label']} ({len(bank['indices'])} ch)"
+
+
 @callback(
     Output("store-neural-path", "data"),
     Output("div-neural-filename", "children"),
@@ -89,15 +99,19 @@ def browse_neural(n_clicks):
         return path, Path(path).name, None, [], None, {"display": "none"}
 
     saved_bank = load_identity(path)["bank"]
-    # Labelled by BOX, not by animal name. Box N -> bank N is confirmed rig wiring
-    # (Box 1 = FP01-FP05, Box 2 = FP17-FP21), so it is a property of the file and
-    # true regardless of how the file was named. The animal name is a weaker claim
-    # — it relies on the filename listing animals in box order, which holds for
-    # "acquisition G16-1 and G20-3" but is just a naming habit — so it is left out
-    # rather than shown as though it were known. Look up your animal's box in the
-    # session notes or the video filename ("... Box 2.wmv").
-    options = [{"label": f"Box {i + 1} · {b['label']}  ({len(b['indices'])} ch)",
-                "value": i}
+    # Box N -> bank N is confirmed rig wiring (Box 1 = FP01-FP05, Box 2 =
+    # FP17-FP21), so the box is a property of the file. The animal NAME is a
+    # weaker claim — it reads the .pl2 filename as listing animals in box order,
+    # which holds for "acquisition G16-1 and G20-3" but is a naming habit rather
+    # than a guarantee.
+    #
+    # It is shown anyway, because leaving it out made this unusable: the user has
+    # to pick their animal, and "Box 1 / Box 2" asks them to look it up somewhere
+    # else. Showing the name costs nothing, since selecting it only SEEDS the
+    # editable Animal field — nothing is asserted behind the user's back, and a
+    # wrong guess is a visible name they can correct rather than a silent one.
+    names = parse_animal_ids(path)
+    options = [{"label": _bank_option_label(names, i, b), "value": i}
                for i, b in enumerate(banks)]
     row_style = {"display": "flex", "alignItems": "center", "marginTop": "3px"}
     return path, Path(path).name, saved_bank, options, saved_bank, row_style
@@ -161,7 +175,17 @@ def choose_bank(bank_index, neural_path):
     """
     if not neural_path or bank_index is None:
         return no_update
-    saved = load_identity(neural_path)
+    # The animal is read for the bank being SELECTED, not the one being left —
+    # writing back the previous bank's name would relabel this animal with its
+    # neighbour's.
+    saved = load_identity(neural_path, bank_index)
+    # The animal is NOT filled in from the filename here, deliberately. Which
+    # animal sits on which headstage is not in the data: it needs the .pl2
+    # filename to list animals in box order (a naming habit) AND the Box N ->
+    # bank N wiring (in the lab's notes, in no file). Writing a name from those
+    # would make the app assert what it cannot know, and a reversed filename
+    # would silently export one animal's ephys under the other's name. The
+    # dropdown shows what the filename says, attributed; the human types it.
     save_identity(neural_path, animal=saved["animal"], session=saved["session"],
                   bank=bank_index)
     return bank_index
@@ -216,26 +240,64 @@ def render_neural_metadata(neural_path, behavior_path):
 # ---------------------------------------------------------------------------
 
 @callback(
+    Output("input-animal", "options"),
     Output("input-animal", "value"),
     Output("input-session", "value"),
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
+    Input("store-bank", "data"),
 )
-def fill_identity(neural_path, behavior_path):
-    """Seed Animal and Session when either file changes.
+def fill_identity(neural_path, behavior_path, bank_index):
+    """Seed Animal and Session when either file, or the channel group, changes.
 
     A saved override wins over inference — that's the whole point of letting it be
     edited — but inference fills anything not overridden, so a fresh recording
     needs no typing.
+
+    `store-bank` is an Input, not a State: on a two-animal .pl2 the animal is a
+    property of the channel group, so switching groups has to re-read it. Without
+    this the field kept showing the previous animal's name. Same omission as
+    `render_channel_tab` had. Note Dash passes all Inputs before any States, so
+    adding one lands mid-signature rather than at the end.
     """
     if not neural_path and not behavior_path:
-        return no_update, no_update
+        return no_update, no_update, no_update
 
-    session = load_session_from_paths(neural_path or "", behavior_path or "")
-    saved = load_identity(session.pl2_path)
+    session = load_session_from_paths(neural_path or "", behavior_path or "",
+                                      bank_index=bank_index)
+    saved = load_identity(session.pl2_path, session.bank_index)
     animal = saved["animal"] or session.animal_id
     label = saved["session"] or resolve_session_name(session.behavior_metadata)
-    return animal, label
+    return _animal_options(neural_path, behavior_path, animal), animal, label
+
+
+def _animal_options(neural_path, behavior_path, current):
+    """Every animal named in the filenames, plus whatever is already set.
+
+    The .pl2 filename names both animals of a two-animal recording, and the
+    behavior filename names the one it belongs to. Listing them is all the app
+    can honestly do: pairing an animal with a headstage is in the lab's notes,
+    so the user makes that call by setting the two dropdowns independently.
+
+    `current` is included so a name typed before, or read from a behavior
+    header, is never dropped off the list it is selected in.
+    """
+    names = list(parse_animal_ids(neural_path)) if neural_path else []
+    # The behavior filename is only consulted when there is no .pl2, because the
+    # .pl2 already names every animal in the recording and the two files put the
+    # name in different places: "acquisition G16-1 and G20-3" ends with an animal,
+    # "G16-1 Raw Aquisition" starts with one. Parsing both the same way turns
+    # "Aquisition" into a candidate.
+    if not names and behavior_path:
+        names = list(parse_animal_ids(behavior_path))
+    if current:
+        names.append(current)
+    seen, unique = set(), []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            unique.append(name)
+    return [{"label": n, "value": n} for n in unique]
 
 
 @callback(
@@ -243,11 +305,20 @@ def fill_identity(neural_path, behavior_path):
     Output("input-session", "disabled"),
     Output("btn-edit-identity", "children"),
     Input("btn-edit-identity", "n_clicks"),
+    Input("input-session", "value"),
 )
-def toggle_identity_edit(n_clicks):
-    """Locked by default so an inferred value can't be changed by a stray click."""
+def toggle_identity_edit(n_clicks, label):
+    """Locked so an inferred value can't be changed by a stray click.
+
+    Animal is exempt: it is a dropdown of names read from the filenames, so
+    picking one is a choice from a known list rather than free text a stray click
+    could corrupt — and locking it made a two-animal .pl2 with no behavior file a
+    dead end, since the animal can't be inferred there and the export refuses a
+    blank one. Session is still free text, and still blank when nothing inferred
+    it, so it unlocks when empty.
+    """
     editing = bool(n_clicks) and n_clicks % 2 == 1
-    return (not editing), (not editing), ("Done" if editing else "Edit")
+    return False, (not editing) and bool(label), ("Done" if editing else "Edit")
 
 
 @callback(
@@ -291,10 +362,10 @@ def _alignment_block(session):
 
     Shown because it is invisible otherwise and it is the single assumption every
     number downstream rests on. The offset is anchored on the END of both
-    recordings — there is no behavior-onset pulse anywhere — so a truncated or
-    trimmed behavior export shifts everything silently. `check_alignment`
-    re-derives it from the animal's startle response to the shock TTLs, and a
-    failure has to be loud rather than a plausible-looking plot.
+    behavior file's own duration — there is no behavior-onset pulse anywhere — so
+    a truncated or trimmed export shifts everything silently. `check_alignment`
+    reports only that, loudly; it says nothing when the file is consistent, so a
+    no-shock control looks the same as any other session.
 
     Nothing is shown when there are no events to align to, which is every
     open-field session.
@@ -318,8 +389,6 @@ def _alignment_block(session):
         rows.append(html.Div(f"⚠ {message}",
                              style={"color": "#b00", "whiteSpace": "normal",
                                     "marginTop": "4px"}))
-    elif message:
-        rows.append(html.Div(message, style={"color": "#2a7", "whiteSpace": "normal"}))
     return rows
 
 

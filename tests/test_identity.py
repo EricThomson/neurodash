@@ -118,10 +118,18 @@ def test_identity_without_a_pl2_is_a_no_op():
 # this — and because both other writers rewrite the whole file.
 
 def test_bank_round_trips(tmp_path):
+    """On a multi-animal file the animal is asked for BY BANK.
+
+    Reading it without one returns blank rather than a guess: a single scalar
+    beside a two-animal .pl2 is ambiguous, and answering anyway is how G16-1's
+    ephys came back labelled G20-3.
+    """
     pl2 = tmp_path / "rec.pl2"
     save_identity(pl2, "G20-3", "acquisition", bank=1)
-    assert load_identity(pl2) == {"animal": "G20-3", "session": "acquisition",
-                                  "bank": 1}
+    assert load_identity(pl2, bank=1) == {"animal": "G20-3",
+                                          "session": "acquisition", "bank": 1}
+    assert load_identity(pl2)["session"] == "acquisition"   # session is shared
+    assert load_identity(pl2)["bank"] == 1
 
 
 def test_bank_zero_survives(tmp_path):
@@ -138,3 +146,61 @@ def test_saving_channel_annotations_keeps_the_bank(tmp_path):
     save_channels(pl2, {"pl2_filename": "rec.pl2", "comment": "",
                         "exemplar_channel_index": None, "channels": {}})
     assert load_identity(pl2)["bank"] == 1
+
+
+# --- one .pl2, two animals: the override must not leak between them --------
+# Found the first time the second animal of the acquisition file was ever
+# loaded. The sidecar held one `animal_override` for the whole file, so
+# selecting G16-1's bank returned "G20-3" — the name typed for its neighbour —
+# and its ephys would have exported under the wrong animal. Same class of
+# mix-up the bank filtering prevents for the data itself.
+
+def test_each_bank_keeps_its_own_animal(tmp_path):
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    save_identity(pl2, "G20-3", "acquisition", bank=1)
+    save_identity(pl2, "G16-1", "acquisition", bank=0)
+
+    assert load_identity(pl2, bank=0)["animal"] == "G16-1"
+    assert load_identity(pl2, bank=1)["animal"] == "G20-3"
+
+
+def test_an_unnamed_bank_is_blank_not_its_neighbours_name(tmp_path):
+    """The failure that started this: only bank 1 was ever named."""
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    save_identity(pl2, "G20-3", "acquisition", bank=1)
+
+    assert load_identity(pl2, bank=1)["animal"] == "G20-3"
+    assert load_identity(pl2, bank=0)["animal"] == "", (
+        "bank 0 inherited bank 1's animal name")
+
+
+def test_a_legacy_scalar_migrates_to_the_bank_it_was_typed_under(tmp_path):
+    """Sidecars written before this hold a scalar plus the active bank.
+
+    That is enough to place it, so an already-entered name survives instead of
+    being discarded, and it lands on one animal rather than both.
+    """
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    path = channel_notes_path(pl2)
+    path.write_text(json.dumps({"animal_override": "G20-3",
+                                "session": "acquisition", "bank": 1}))
+
+    assert load_identity(pl2, bank=1)["animal"] == "G20-3"
+    assert load_identity(pl2, bank=0)["animal"] == ""
+
+    # naming the other animal keeps the migrated one
+    save_identity(pl2, "G16-1", "acquisition", bank=0)
+    assert load_identity(pl2, bank=0)["animal"] == "G16-1"
+    assert load_identity(pl2, bank=1)["animal"] == "G20-3"
+
+
+def test_rating_a_channel_keeps_both_animals(tmp_path):
+    """save_channels rewrites the whole file; it must not flatten the dict."""
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    save_identity(pl2, "G20-3", "acquisition", bank=1)
+    save_identity(pl2, "G16-1", "acquisition", bank=0)
+    save_channels(pl2, {"pl2_filename": pl2.name, "comment": "",
+                        "exemplar_channel_index": None, "channels": {}})
+
+    assert load_identity(pl2, bank=0)["animal"] == "G16-1"
+    assert load_identity(pl2, bank=1)["animal"] == "G20-3"

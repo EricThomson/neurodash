@@ -11,12 +11,23 @@ from pathlib import Path
 
 import pytest
 
-from neurodash import callbacks
+from neurodash import callbacks, channel_io
 from neurodash.app import create_app
 from neurodash.config import ACQUISITION_EPOCH_PARAMS
 from neurodash.layout import epoch_input_id
 
 CALLBACKS_SRC = Path(callbacks.__file__)
+
+
+def decorator_args(function_name):
+    """The @callback(...) arguments for one callback, as source strings."""
+    tree = ast.parse(CALLBACKS_SRC.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Call) and getattr(dec.func, "id", "") == "callback":
+                    return [ast.unparse(a).replace("'", '"') for a in dec.args]
+    raise AssertionError(f"{function_name} carries no @callback")
 
 
 def callback_function_names():
@@ -120,6 +131,74 @@ def test_browse_merge_folder_cancelled(monkeypatch):
 
 
 def test_identity_edit_button_toggles():
-    assert callbacks.toggle_identity_edit(0) == (True, True, "Edit")
-    assert callbacks.toggle_identity_edit(1) == (False, False, "Done")
-    assert callbacks.toggle_identity_edit(2) == (True, True, "Edit")
+    """Session locks; Animal never does — it is a dropdown of known names."""
+    assert callbacks.toggle_identity_edit(0, "hab1") == (False, True, "Edit")
+    assert callbacks.toggle_identity_edit(1, "hab1") == (False, False, "Done")
+    assert callbacks.toggle_identity_edit(2, "hab1") == (False, True, "Edit")
+
+
+def test_a_blank_session_is_editable_without_hunting_for_edit():
+    assert callbacks.toggle_identity_edit(0, "") == (False, False, "Edit")
+
+
+# --- animal and channels are chosen independently -------------------------
+# Which animal sits on which headstage is in the lab's notes, not in any file.
+# So the app lists what it can read — the animals named in the filenames, and
+# the channel groups in the .pl2 — and the user pairs them. Nothing infers one
+# from the other.
+
+def test_animal_options_come_from_the_pl2_which_names_both():
+    options = callbacks._animal_options(
+        "/data/acquisition G16-1 and G20-3.pl2",
+        "/data/G16-1 Raw Aquisition.csv", "")
+    assert [o["value"] for o in options] == ["G16-1", "G20-3"]
+
+
+def test_behavior_filename_is_used_when_there_is_no_pl2():
+    options = callbacks._animal_options("", "/data/FC33-4.xlsx", "")
+    assert [o["value"] for o in options] == ["FC33-4"]
+
+
+def test_animal_options_from_the_pl2_alone():
+    """No behavior file loaded: both animals must still be offered."""
+    options = callbacks._animal_options(
+        "/data/acquisition G16-1 and G20-3.pl2", "", "")
+    assert [o["value"] for o in options] == ["G16-1", "G20-3"]
+
+
+def test_a_set_animal_stays_in_its_own_option_list():
+    """A name from a behavior header may appear in no filename."""
+    options = callbacks._animal_options("/data/rec.pl2", "", "G20_3")
+    assert "G20_3" in [o["value"] for o in options]
+
+
+def test_channel_options_do_not_name_the_animal():
+    """Naming it there would imply the app knows the headstage mapping."""
+    bank = {"label": "FP01-FP05", "indices": [0, 1, 2, 3, 4]}
+    label = callbacks._bank_option_label(["G16-1", "G20-3"], 0, bank)
+    assert "G16-1" not in label
+    assert "Box 1" in label and "FP01-FP05" in label
+
+
+def test_choosing_a_group_does_not_name_the_animal(tmp_path):
+    """Decoupled: the channel group says nothing about who the animal is."""
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    pl2.write_bytes(b"")
+    callbacks.choose_bank(0, str(pl2))
+    assert channel_io.load_identity(pl2, bank=0)["animal"] == ""
+
+
+def test_a_chosen_animal_survives_switching_groups(tmp_path):
+    pl2 = tmp_path / "acquisition G16-1 and G20-3.pl2"
+    pl2.write_bytes(b"")
+    channel_io.save_identity(pl2, "G16-1", "acq", bank=0)
+    callbacks.choose_bank(1, str(pl2))
+    callbacks.choose_bank(0, str(pl2))
+    assert channel_io.load_identity(pl2, bank=0)["animal"] == "G16-1"
+
+
+def test_fill_identity_reacts_to_the_channel_group():
+    """Without store-bank as an Input the field kept the previous animal."""
+    args = decorator_args("fill_identity")
+    assert any(a.startswith('Input("store-bank"') for a in args), (
+        "fill_identity must re-read the animal when the channel group changes")
