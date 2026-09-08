@@ -162,3 +162,59 @@ def test_overlap_with_a_merged_file_is_caught(tmp_path, write_export):
     entries, _ = merge.scan_folder(trap)
     reasons = merge.check_compatible(entries)
     assert reasons and "hab2" in reasons[0]
+
+
+# --- column layout of the merged table ------------------------------------
+# pd.concat takes the FIRST frame's column order and appends whatever later
+# frames introduce, so a second animal on different channels had its theta
+# columns land after the behavior block: peak/power/ratio for FP01, then
+# motion/freezing/epoch/tone/shock, then FP17 and FP21. The data was right and
+# the layout was unreadable.
+
+def test_theta_columns_are_contiguous_and_come_last():
+    cols = ["session", "time", "animal",
+            "theta_peak_FP01", "theta_power_FP01", "theta_ratio_FP01",
+            "motion", "freezing", "epoch", "tone", "shock",
+            "theta_peak_FP17", "theta_peak_FP21", "theta_power_FP17",
+            "theta_power_FP21", "theta_ratio_FP17", "theta_ratio_FP21"]
+    out = merge._ordered_columns(cols, ["session", "time", "animal"])
+
+    # Behavior is a FIXED set, so it sits left and stays put; the spectral block
+    # is what grows with channel count, so it grows rightward into empty space.
+    assert out[:3] == ["session", "time", "animal"]
+    assert out[3:8] == ["motion", "freezing", "epoch", "tone", "shock"]
+    assert out[8:] == [
+        "theta_peak_FP01", "theta_peak_FP17", "theta_peak_FP21",
+        "theta_power_FP01", "theta_power_FP17", "theta_power_FP21",
+        "theta_ratio_FP01", "theta_ratio_FP17", "theta_ratio_FP21"]
+
+
+def test_behavior_stays_put_as_the_spectral_block_grows():
+    """The point of the layout: motion must not move when channels are added."""
+    lead = ["session", "time", "animal"]
+    narrow = merge._ordered_columns(
+        lead + ["theta_peak_A", "motion", "freezing"], lead)
+    wide = merge._ordered_columns(
+        lead + ["theta_peak_A", "theta_peak_B", "theta_power_A", "theta_power_B",
+                "motion", "freezing"], lead)
+    assert narrow.index("motion") == wide.index("motion") == 3
+
+
+def test_reordering_neither_loses_nor_invents_columns():
+    cols = ["session", "time", "animal", "theta_peak_A", "motion", "x", "y"]
+    out = merge._ordered_columns(cols, ["session", "time", "animal"])
+    assert sorted(out) == sorted(cols)
+
+
+def test_behavior_columns_keep_their_own_order():
+    """Only the theta block is rearranged; velocity must not sort before mobility."""
+    cols = ["time", "theta_peak_A", "velocity", "mobility", "x", "y"]
+    out = merge._ordered_columns(cols, ["time"])
+    assert out == ["time", "velocity", "mobility", "x", "y", "theta_peak_A"]
+
+
+def test_a_single_animal_merge_matches_the_export_layout():
+    """A merged file must look like a wider version of its inputs, not a new shape."""
+    cols = ["session", "time", "animal", "motion", "freezing",
+            "theta_peak_FP17", "theta_power_FP17", "theta_ratio_FP17"]
+    assert merge._ordered_columns(cols, ["session", "time", "animal"]) == cols

@@ -290,9 +290,39 @@ def merge_tables(entries):
     merged["time"] = merged["time"].round(6)
 
     lead = [c for c in ("session", "time", "animal") if c in merged.columns]
-    rest = [c for c in merged.columns if c not in lead]
-    merged = merged[lead + rest]
+    merged = merged[_ordered_columns(list(merged.columns), lead)]
     return merged.sort_values(lead, kind="stable").reset_index(drop=True)
+
+
+# Grouped by variable, not by channel — the same shape a single-file export uses,
+# so "select these and overlay" is one contiguous block.
+THETA_VARIABLES = ("theta_peak", "theta_power", "theta_ratio")
+
+
+def _ordered_columns(columns, lead):
+    """Lead columns, then the behavior columns, then every theta column.
+
+    Rebuilt rather than inherited from the concat. `pd.concat` takes the first
+    frame's column order and appends whatever later frames introduce, so a second
+    animal on different channels had its theta columns split across the behavior
+    block: G16-1's FP01 columns, then motion/freezing/epoch/tone/shock, then
+    G20-3's FP17/FP21 columns. Correct data, unreadable layout — the spectral
+    columns have to be contiguous to be read as a group.
+
+    Spectral goes LAST, matching the single-file export: behavior is a fixed set
+    of columns and the spectral block is what grows with channel count, so this
+    keeps motion/freezing at the same position no matter how wide the file gets.
+
+    Channels sort within each variable, so the same variable's channels sit
+    together and in the same order in every merged file. Behavior columns keep
+    their original relative order.
+    """
+    rest = [c for c in columns if c not in lead]
+    theta = []
+    for variable in THETA_VARIABLES:
+        theta += sorted(c for c in rest if c.startswith(variable + "_"))
+    seen = set(theta)
+    return lead + [c for c in rest if c not in seen] + theta
 
 
 def merged_header(entries):

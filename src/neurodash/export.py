@@ -109,10 +109,17 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
                          ratio_low_band=None, ratio_high_band=None):
     """Merged per-time-bin table for CSV export — one row per bin, channels in columns.
 
-    Columns: animal, session, time, then theta_peak_<CH> for each saved channel, then
-    theta_power_<CH>, then theta_ratio_<CH>, then velocity, mobility, x, y.
+    Columns: animal, session, time, then the behavior columns (velocity, mobility,
+    x, y — or motion, freezing, epoch, tone, shock), then theta_peak_<CH> for each
+    saved channel, then theta_power_<CH>, then theta_ratio_<CH>.
+
     Grouped by variable rather than by channel so "select these and overlay" is one
     contiguous block of columns. Units are in the header, not the names.
+
+    Behavior sits to the LEFT of the spectral block because it is a fixed set of
+    columns while the spectral block grows with the channel count. Put it on the
+    right and `motion` lands in a different column in every export; on the left it
+    is always in the same place and the spectral columns grow into empty space.
 
     **Wide, not long** (a `channel` column with one row per channel per bin): a
     channel is a separate signal, not a level of a factor — long asks you to think
@@ -200,9 +207,14 @@ def build_analysis_table(session, animal, channel_indices, band, spect_params,
         per_channel["theta_power"][label] = power
         per_channel["theta_ratio"][label] = ratio
 
+    # Behavior BEFORE the spectral block, deliberately. The behavior columns are
+    # a fixed set, so putting them first pins them to the same position in every
+    # export; the spectral block is the part that grows with channel count, and
+    # it grows rightward into empty space instead of shoving motion/freezing
+    # further right in every wider file.
     columns = {"animal": animal, "session": session_name, "time": times}
+    columns.update(behavior)
     for variable, by_label in per_channel.items():
         for label, values in by_label.items():
             columns[f"{variable}_{label}"] = values
-    columns.update(behavior)
     return pd.DataFrame(columns)
