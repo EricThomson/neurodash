@@ -20,6 +20,7 @@ from neurodash.config import (
     DEFAULT_THETA_LOW_HZ, DEFAULT_THETA_HIGH_HZ, DEFAULT_THETA_INTERP_STEP_HZ,
     DEFAULT_THETA_SMOOTH_WIDTH, DEFAULT_THETA_DOT_SIZE,
     DEFAULT_THETA_ESTIMATOR,
+    DEFAULT_THETA_BANDPASS_MARGIN_HZ, DEFAULT_THETA_BANDPASS_ORDER,
     DEFAULT_THETA_RATIO_LOW_BAND, DEFAULT_THETA_RATIO_HIGH_BAND,
     REOPEN_LAST_SESSION,
     EXEMPLAR_SEEDS_DEFAULT_CHANNEL, EXPORT_DIR,
@@ -1440,6 +1441,12 @@ _ANALYSIS_HEADER_FIELDS = (
     "behavior_source", "start_time", "experiment", "trial", "arena",
     "behavior_binning", "grid_note", "spectrogram_channel_comment", "behavior_comment",
     "theta_ratio_bands_hz", "column_units", "session",
+    # Appended, per the note above. Blank for the "argmax" estimator, which does
+    # not filter. NOT a merge BLOCKING_FIELD: it is derived from theta_band_hz,
+    # which already blocks, so a real band difference is caught. The one case it
+    # would add is a change to the margin constant between neurodash versions,
+    # and making it blocking would refuse every export written before today.
+    "theta_bandpass_hz",
 )
 
 # Column names carry no units — they'd compete with the channel suffix — so the units
@@ -1493,6 +1500,17 @@ def _analysis_header(session, animal, behavior_path, channel_data,
         v["spectrogram_channel"] = ", ".join(labels)
         v["theta_band_hz"] = f"{band[0]}-{band[1]}"
         v["theta_estimator"] = estimator or ""
+        # The filter edges, spelled out. They are DERIVED (analysis band +/- a
+        # margin) and the filter runs on the LFP before the spectrogram, so it is
+        # destructive and leaves no signature in the data: an export that doesn't
+        # state them cannot be audited, and nobody can write the methods section
+        # from the CSV alone. Recorded only for the estimator that actually
+        # filters — "argmax" touches the raw signal.
+        if (estimator or DEFAULT_THETA_ESTIMATOR) == "bandpass":
+            margin = DEFAULT_THETA_BANDPASS_MARGIN_HZ
+            v["theta_bandpass_hz"] = (
+                f"{band[0] - margin}-{band[1] + margin} "
+                f"(butterworth order {DEFAULT_THETA_BANDPASS_ORDER}, zero-phase)")
         # Both sub-bands on one row — the ratio is a contrast, so a band is
         # meaningless without its partner.
         r_low = tuple(ratio_low_band or DEFAULT_THETA_RATIO_LOW_BAND)
