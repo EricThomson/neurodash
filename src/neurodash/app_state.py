@@ -3,11 +3,14 @@
 Two things, both in ~/.neurodash, both best-effort — any I/O error falls back to
 a default rather than raising:
 
-  last_dir.txt      the folder the picker last browsed, so dialogs reopen there
-  last_session.json the files last opened, so a restart reopens them
+  last_dir.txt        the folder the picker last browsed, so dialogs reopen there
+  last_export_dir.txt where exports last went, so Save-As reopens there
+  last_session.json   the files last opened, so a restart reopens them
 
 They're separate on purpose: the browsed folder also tracks the *merge* folder
-picker, which has nothing to do with the loaded session.
+picker, which has nothing to do with the loaded session; and you browse to raw
+recordings but save analysis CSVs somewhere else entirely, so sharing one folder
+between the two would send each dialog to the other's location.
 
 Nothing machine-specific belongs in the repo — this is where it lives instead.
 """
@@ -18,7 +21,35 @@ from pathlib import Path
 from neurodash import config
 
 _LAST_DIR_FILE = Path.home() / ".neurodash" / "last_dir.txt"
+_LAST_EXPORT_DIR_FILE = Path.home() / ".neurodash" / "last_export_dir.txt"
 _LAST_SESSION_FILE = Path.home() / ".neurodash" / "last_session.json"
+
+
+def last_export_dir():
+    """Folder the Save-As dialog should open in — where the last export went.
+
+    Falls back to config.EXPORT_DIR, which is the suggested home for exports
+    rather than the only place they can go. Once you have saved somewhere, that
+    is almost always where the next one belongs too.
+    """
+    try:
+        saved = _LAST_EXPORT_DIR_FILE.read_text(encoding="utf-8").strip()
+        if saved and Path(saved).is_dir():
+            return str(saved)
+    except OSError:
+        pass
+    return str(config.EXPORT_DIR)
+
+
+def remember_export_dir(path):
+    """Persist where an export was just written, as the next Save-As default."""
+    try:
+        path = Path(path)
+        folder = path if path.is_dir() else path.parent
+        _LAST_EXPORT_DIR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_EXPORT_DIR_FILE.write_text(str(folder), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def last_browse_dir():

@@ -37,6 +37,8 @@ def isolated_state(tmp_path, monkeypatch):
     """Redirect persisted state at ~/.neurodash into tmp_path."""
     monkeypatch.setattr(app_state, "_LAST_SESSION_FILE", tmp_path / "last_session.json")
     monkeypatch.setattr(app_state, "_LAST_DIR_FILE", tmp_path / "last_dir.txt")
+    monkeypatch.setattr(app_state, "_LAST_EXPORT_DIR_FILE",
+                        tmp_path / "last_export_dir.txt")
     monkeypatch.setattr(arena_io, "ARENAS_DIR", tmp_path / "arenas")
     monkeypatch.setattr(arena_io, "_LAST_ARENA_FILE", tmp_path / "last_arena.txt")
     return tmp_path

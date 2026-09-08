@@ -114,7 +114,7 @@ def test_browse_merge_folder_runs(tmp_path, monkeypatch, write_export):
     write_export(tmp_path, "AAA_hab1_analysis.csv", animal="AAA", session="hab1")
     write_export(tmp_path, "AAA_hab2_analysis.csv", animal="AAA", session="hab2")
     monkeypatch.setattr(callbacks, "pick_directory", lambda title, start: str(tmp_path))
-    monkeypatch.setattr(callbacks, "remember_browse_dir", lambda path: None)
+    monkeypatch.setattr(callbacks, "remember_export_dir", lambda path: None)
 
     folder, options, value, status = callbacks.browse_merge_folder(1)
 
@@ -128,6 +128,24 @@ def test_browse_merge_folder_runs(tmp_path, monkeypatch, write_export):
 def test_browse_merge_folder_cancelled(monkeypatch):
     monkeypatch.setattr(callbacks, "pick_directory", lambda title, start: "")
     assert callbacks.browse_merge_folder(1)[3] == ""
+
+
+def test_merge_picker_opens_where_exports_went(tmp_path, monkeypatch, write_export):
+    """Its inputs are exports, so it must not open at the raw-data folder."""
+    write_export(tmp_path, "AAA_hab1_analysis.csv", animal="AAA", session="hab1")
+    monkeypatch.setattr(callbacks, "remember_export_dir", lambda path: None)
+    monkeypatch.setattr(callbacks, "last_export_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(callbacks, "last_browse_dir",
+                        lambda: "/raw/data/should/not/be/used")
+
+    seen = {}
+    def fake_pick(title, start):
+        seen["start"] = start
+        return str(tmp_path)
+    monkeypatch.setattr(callbacks, "pick_directory", fake_pick)
+
+    callbacks.browse_merge_folder(1)
+    assert seen["start"] == str(tmp_path)
 
 
 def test_identity_edit_button_toggles():

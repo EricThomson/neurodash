@@ -204,3 +204,40 @@ def test_rating_a_channel_keeps_both_animals(tmp_path):
 
     assert load_identity(pl2, bank=0)["animal"] == "G16-1"
     assert load_identity(pl2, bank=1)["animal"] == "G20-3"
+
+
+# --- Save-As reopens where the last export went ---------------------------
+
+def test_export_dir_defaults_to_export_dir_then_follows_you(tmp_path, isolated_state):
+    """Exports come in sets, so the second dialog should start where the first ended."""
+    from neurodash import app_state, config
+
+    assert app_state.last_export_dir() == str(config.EXPORT_DIR)
+
+    somewhere = tmp_path / "acquisition" / "save_testing"
+    somewhere.mkdir(parents=True)
+    app_state.remember_export_dir(somewhere / "G20-3_analysis.csv")
+    assert app_state.last_export_dir() == str(somewhere)
+
+
+def test_a_deleted_export_dir_falls_back(tmp_path, isolated_state):
+    """A folder that has moved must not leave the dialog pointing at nothing."""
+    from neurodash import app_state, config
+
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    app_state.remember_export_dir(gone)
+    gone.rmdir()
+    assert app_state.last_export_dir() == str(config.EXPORT_DIR)
+
+
+def test_export_dir_is_separate_from_the_browse_dir(tmp_path, isolated_state):
+    """You browse to raw recordings and save analysis CSVs elsewhere."""
+    from neurodash import app_state
+
+    raw = tmp_path / "raw"; raw.mkdir()
+    out = tmp_path / "out"; out.mkdir()
+    app_state.remember_browse_dir(raw / "rec.pl2")
+    app_state.remember_export_dir(out / "rec_analysis.csv")
+    assert app_state.last_browse_dir() == str(raw)
+    assert app_state.last_export_dir() == str(out)

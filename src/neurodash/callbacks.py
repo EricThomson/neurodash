@@ -27,6 +27,7 @@ from neurodash.config import (
 )
 from neurodash.app_state import (
     last_browse_dir, remember_browse_dir, last_session, remember_session,
+    last_export_dir, remember_export_dir,
 )
 from neurodash.file_picker import pick_file, pick_save_path, pick_directory
 from neurodash import epochs
@@ -1403,15 +1404,22 @@ _NO_SESSION_HINT = "No session label — fill in Session at the top of the sideb
 def _ask_export_path(default_name, start_dir=None):
     """Ask the user where to save an export; "" if they cancel.
 
-    Opens in EXPORT_DIR — the suggested home for exports, not the only place they
-    can go. Pass `start_dir` when the answer is obvious from context: the merge
-    already knows the folder you picked, and opening anywhere else is just a
-    location to navigate back out of.
+    Opens where the last export went, falling back to EXPORT_DIR the first time —
+    the suggested home for exports, not the only place they can go. Reopening
+    there matters because exports come in sets: you save one animal, then the
+    next, then merge them, and each dialog starting at a folder you have to
+    navigate out of costs the same clicks every time.
+
+    Pass `start_dir` when the answer is obvious from context: the merge already
+    knows the folder you picked.
     """
     if start_dir is None:
-        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-        start_dir = EXPORT_DIR
-    return pick_save_path("Save CSV", "CSV (*.csv)", str(start_dir), default_name)
+        start_dir = last_export_dir()
+    Path(start_dir).mkdir(parents=True, exist_ok=True)
+    path = pick_save_path("Save CSV", "CSV (*.csv)", str(start_dir), default_name)
+    if path:
+        remember_export_dir(path)
+    return path
 
 
 def _write_export(df, out_path, comment=""):
@@ -1825,12 +1833,17 @@ def _describe(values, limit=3):
     prevent_initial_call=True,
 )
 def browse_merge_folder(n_clicks):
-    """Pick a folder and list the analysis exports in it, all ticked."""
-    folder = pick_directory("Select folder of analysis exports", last_browse_dir())
+    """Pick a folder and list the analysis exports in it, all ticked.
+
+    Opens where exports last went, not where files were last browsed: the inputs
+    here are exports, so that folder is almost always the answer, and browsing is
+    for raw recordings which live somewhere else entirely.
+    """
+    folder = pick_directory("Select folder of analysis exports", last_export_dir())
     if not folder:
         return no_update, no_update, no_update, ""
 
-    remember_browse_dir(folder)
+    remember_export_dir(folder)
     entries, problems = merge.scan_folder(folder)
     # Animal *and* session, and both may be plural: an already-merged table is a
     # legitimate input, and labelling it by its first row would call a whole
