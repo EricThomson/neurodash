@@ -57,13 +57,20 @@ def session_extent(session):
     return session.extent_s
 
 
-def build_strip(session, epoch_params=None):
+def build_strip(session, epoch_params=None, view_range=None):
     """The navigator strip for this session, or None when there is nothing to show.
 
     Everything is positioned in percent of the session, so neither this function
     nor the CSS needs to know the strip's pixel width, and a window resize costs
     nothing. The viewport box is the ONLY element that ever moves;
     `assets/session_navigator.js` moves it by writing left/width.
+
+    `view_range` is emitted as a data attribute so the JS can size the box from
+    the server's answer instead of interrogating the figure. It used to read
+    `gd.layout.xaxis.range`, which on a figure that has not received its range
+    yet reports plotly's default **[-1, 6]** — truthy, so the guard against it
+    being missing did not fire, and the box was painted 7/1291 of the strip
+    wide: the 6 px sliver that showed until the first drag.
     """
     t_end = session_extent(session)
     if t_end is None:
@@ -112,10 +119,26 @@ def build_strip(session, epoch_params=None):
             # Read by the JS. Passed as data attributes rather than hardcoded in
             # the .js so Python stays the single source for both.
             **{"data-tend": f"{t_end:.4f}",
-               "data-throttle-ms": str(config.NAVIGATOR_LIVE_THROTTLE_MS)},
+               "data-throttle-ms": str(config.NAVIGATOR_LIVE_THROTTLE_MS),
+               "data-view": _view_attribute(view_range, t_end)},
         ),
         # Must line up with the figure's plotting area, hence the shared margins.
         style={"paddingLeft": f"{config.PLOT_MARGIN_LEFT_PX}px",
                "paddingRight": f"{config.PLOT_MARGIN_RIGHT_PX}px",
                "marginBottom": "4px"},
     )
+
+
+def _view_attribute(view_range, t_end):
+    """The initial view as "x0,x1" for the strip's data-view attribute.
+
+    Falls back to the app's default window when nothing is passed, so the box is
+    always sized from a real number rather than from whatever the figure happens
+    to be reporting at the moment the strip is bound.
+    """
+    if view_range and len(view_range) == 2:
+        x0, x1 = float(view_range[0]), float(view_range[1])
+    else:
+        x0, x1 = 0.0, float(config.DEFAULT_VIEW_DURATION)
+    x1 = min(x1, t_end)
+    return f"{x0:.4f},{x1:.4f}"

@@ -65,8 +65,24 @@
         if (!gd || !gd.layout || !gd.layout.xaxis || !gd.layout.xaxis.range) {
             return null;
         }
+        /* A figure that has not received its range yet still reports one:
+           plotly's default [-1, 6]. That is truthy, so a plain existence check
+           passed it straight through and the box was painted 7 s wide on a
+           1291 s session — the 6 px sliver. Requiring traces is what tells a
+           real range from a placeholder. */
+        if (!gd.data || !gd.data.length) return null;
         var r = gd.layout.xaxis.range;
         return [Number(r[0]), Number(r[1])];
+    }
+
+    /* The view range the SERVER says the strip was built for. Authoritative and
+       always present, so init never has to wait for the figure. */
+    function statedRange() {
+        if (!state.strip || !state.strip.dataset.view) return null;
+        var parts = state.strip.dataset.view.split(",");
+        if (parts.length !== 2) return null;
+        var x0 = Number(parts[0]), x1 = Number(parts[1]);
+        return (isFinite(x0) && isFinite(x1) && x1 > x0) ? [x0, x1] : null;
     }
 
     function paintBox(x0, x1) {
@@ -228,9 +244,10 @@
 
                 bindDocumentOnce();
 
-                // Prefer the figure's own range; fall back to the last range
-                // syncBox saw. One of the two is always available by now.
-                var initial = currentRange() || state.lastRange;
+                // Figure first when it genuinely has one, then the last range
+                // syncBox saw, then what the server stated. The last is always
+                // available, so the box is never left at its CSS min-width.
+                var initial = currentRange() || state.lastRange || statedRange();
                 if (initial) paintBox(initial[0], initial[1]);
                 return window.dash_clientside.no_update;
             },

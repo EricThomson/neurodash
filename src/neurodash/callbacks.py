@@ -757,8 +757,10 @@ def update_epoch_overlay(epoch_params, controls, neural_path, behavior_path):
     Input("store-behavior-path", "data"),
     Input("store-epoch-params", "data"),
     Input("toggle-no-shock", "value"),
+    State("store-view-range", "data"),
 )
-def render_navigator(neural_path, behavior_path, epoch_params, no_shock):
+def render_navigator(neural_path, behavior_path, epoch_params, no_shock,
+                     view_range):
     """Rebuild the strip when the session or the epoch windows change.
 
     Same inputs as `render_epoch_controls`, and deliberately NOT gated on the
@@ -771,7 +773,7 @@ def render_navigator(neural_path, behavior_path, epoch_params, no_shock):
         return None
     session = load_session_from_paths(neural_path or "", behavior_path or "")
     session.no_shock = bool(no_shock)
-    return session_navigator.build_strip(session, epoch_params)
+    return session_navigator.build_strip(session, epoch_params, view_range)
 
 
 # Bind the drag handlers to a freshly rendered strip. Keyed on the strip's
