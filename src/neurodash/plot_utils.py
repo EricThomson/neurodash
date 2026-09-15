@@ -281,13 +281,13 @@ def _step_series(spans, kind, t_end):
     return xs, ys
 
 
-# Equal widths, and they were never the problem. Unequal ones were tried
-# (tone 7 / shock 2.5) while chasing a magenta baseline that turned out to be a
-# zero session extent, and they looked wrong: the fat trace reads as a different
-# kind of object rather than a sibling channel. Overlap at 0 showing only the
-# top trace is expected and fine; where just ONE trace is at 0 its own colour
-# shows, which draw order alone delivers.
-EVENT_LINE_WIDTHS = {"tone": 3, "shock": 3}
+# Thin, and equal. Width was pushed to 3 (and briefly to an unequal tone 7 /
+# shock 2.5) while chasing a magenta baseline that turned out to be a zero
+# session extent, so none of that weight was ever load-bearing. These are 0/1
+# square waves in a short panel: 1.5 px draws them cleanly without looking
+# clogged, and is what the panel shipped with originally. Overlap at 0 showing only the top trace is expected and fine; where
+# just ONE trace is at 0 its own colour shows, which draw order alone delivers.
+EVENT_LINE_WIDTHS = {"tone": 1.5, "shock": 1.5}
 
 
 def _plot_events(fig, row, session, controls):
@@ -320,16 +320,6 @@ def _plot_events(fig, row, session, controls):
         fig.add_trace(
             go.Scatter(
                 x=xs, y=ys, mode="lines", name=label,
-                # DIFFERENT WIDTHS, on purpose. Both traces are 0/1 and both
-                # sit at 0 for most of the session, so where they coincide only
-                # the top one is visible and the panel becomes a guessing game
-                # about which colour you are looking at. Drawing tone fat and
-                # shock thin makes the overlap read as a blue band with a
-                # magenta core — both present, neither hidden — while a stretch
-                # where only one is at 0 shows that colour cleanly and at full
-                # width. This is the property the panel is actually read for,
-                # and it does not depend on trace order, axis layering, or
-                # anything else that has bitten this panel before.
                 line=dict(color=config.EVENT_SERIES_COLORS[label],
                           width=EVENT_LINE_WIDTHS[label]),
                 hovertemplate=f"{label}: %{{y:.0f}}<extra></extra>",

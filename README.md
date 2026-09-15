@@ -29,6 +29,9 @@ In your cli:
 
 ## Roadmap
 - Add acquisition session
+  - Test acquisiton in crucible with NIH
+- Context session
+- Tone session
 - docs
   - basic how to use
   - Screenshots or gifs
