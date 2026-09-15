@@ -305,9 +305,21 @@ def test_behavior_filename_names_the_animal():
     assert s.animal_id == "G16-1"
 
 
-def test_stated_box_names_the_animal():
-    """Box N -> bank N is confirmed rig wiring, so the box is enough on its own."""
+def test_a_stated_box_does_NOT_name_the_animal():
+    """A box is where the animal sat; a bank is which headstage it wore.
+
+    Box N -> bank N held for one acquisition day and was briefly treated as rig
+    wiring. Nothing stops headstage 1 going into box 2, so the box must not
+    decide this — it would blank a correct name on any differently cabled
+    session, and corroborate a wrong one.
+    """
     s = two_animal_session(0, behavior_name="raw acquisition.csv", box=1)
+    assert s.animal_id == ""
+
+
+def test_a_mismatched_box_does_not_veto_a_named_animal():
+    """The behavior filename names G16-1; a box of 2 must not override that."""
+    s = two_animal_session(0, behavior_name="G16-1 Raw Aquisition.csv", box=2)
     assert s.animal_id == "G16-1"
 
 

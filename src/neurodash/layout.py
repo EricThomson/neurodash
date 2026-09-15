@@ -131,9 +131,8 @@ def _left_sidebar():
                         title="This .pl2 holds more than one animal, on separate "
                               "headstages. Pick this animal's channel group; the "
                               "other animal's are then never shown or exported. "
-                              "Box 1 is the first channel bank, Box 2 the second — "
-                              "check your animal's box in the session notes or the "
-                              "video filename.",
+                              "Which headstage your animal wore is in your notes, "
+                              "not in the file.",
                     ),
                     # Acquisition only — hidden unless the session has shock TTLs,
                     # the same rule the Epochs section follows. Unchecked is the

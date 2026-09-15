@@ -45,6 +45,13 @@
     var state = {
         strip: null, box: null, tEnd: 0, throttleMs: 125,
         drag: null, relayoutInFlight: false, lastCommit: 0, documentBound: false,
+        // Last view range seen, whether or not there was a box to paint it on.
+        // The two callbacks arrive in either order: syncBox fires on page load
+        // (store-view-range has an initial value) while the strip does not exist
+        // until a session loads, and init can run before the figure has a range
+        // to read. Without this cache both paths no-op and the box keeps its CSS
+        // min-width, showing as a 6 px sliver until the first drag.
+        lastRange: null,
     };
 
     /* Resolved per use, never cached: the figure is rebuilt by its own callback
@@ -221,7 +228,9 @@
 
                 bindDocumentOnce();
 
-                var initial = currentRange();
+                // Prefer the figure's own range; fall back to the last range
+                // syncBox saw. One of the two is always available by now.
+                var initial = currentRange() || state.lastRange;
                 if (initial) paintBox(initial[0], initial[1]);
                 return window.dash_clientside.no_update;
             },
@@ -229,8 +238,12 @@
             syncBox: function (viewRange) {
                 /* Mid-drag the box is already where the pointer put it, and a
                    lagging store update would snap it backwards. */
-                if (state.drag || !viewRange) return window.dash_clientside.no_update;
-                paintBox(Number(viewRange[0]), Number(viewRange[1]));
+                if (!viewRange) return window.dash_clientside.no_update;
+                // Cache before the drag guard and before any box check: this may
+                // be the only place the initial range is ever seen.
+                state.lastRange = [Number(viewRange[0]), Number(viewRange[1])];
+                if (state.drag) return window.dash_clientside.no_update;
+                paintBox(state.lastRange[0], state.lastRange[1]);
                 return window.dash_clientside.no_update;
             },
         },

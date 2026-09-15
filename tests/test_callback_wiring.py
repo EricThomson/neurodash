@@ -190,12 +190,19 @@ def test_a_set_animal_stays_in_its_own_option_list():
     assert "G20_3" in [o["value"] for o in options]
 
 
-def test_channel_options_do_not_name_the_animal():
-    """Naming it there would imply the app knows the headstage mapping."""
+def test_channel_options_name_only_the_channels():
+    """Not the animal, and not the box.
+
+    The animal has its own dropdown. The box was shown alongside the range until
+    it was pointed out that a box is where the animal sat while a bank is which
+    headstage it wore — the two are independent and the file records only the
+    second.
+    """
     bank = {"label": "FP01-FP05", "indices": [0, 1, 2, 3, 4]}
-    label = callbacks._bank_option_label(["G16-1", "G20-3"], 0, bank)
+    label = callbacks._bank_option_label(bank)
+    assert "FP01-FP05" in label and "5 ch" in label
     assert "G16-1" not in label
-    assert "Box 1" in label and "FP01-FP05" in label
+    assert "Box" not in label
 
 
 def test_choosing_a_group_does_not_name_the_animal(tmp_path):

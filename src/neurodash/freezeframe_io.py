@@ -188,9 +188,11 @@ def box_number(metadata):
     """Which chamber this recording came from, as an int, or None.
 
     Only some exports state it, on the row where others name the animal
-    ("Box: Box 1"). Worth reading because the box is a real experimental fact:
-    per the lab's session notes Box 1 is the no-shock control and Box 2 is
-    shocked, and the rig wiring is Box N -> channel bank N.
+    ("Box: Box 1"). Read because it is a real fact the file states, and shown as
+    metadata — but it DECIDES NOTHING. A box is where the animal sat; a channel
+    bank is which headstage it wore, and the two are independent (headstage 1
+    can be run in box 2). This briefly drove animal inference on the strength of
+    Box N -> bank N holding for one acquisition day; see CLAUDE.md.
     """
     if not metadata:
         return None

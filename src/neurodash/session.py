@@ -287,25 +287,27 @@ class Session:
         """Name this animal when the behavior file's contents don't.
 
         Some FreezeFrame exports name the BOX on the row where others name the
-        animal ("Box: Box 1"), so the usual source is simply absent. But the
-        recording still identifies the animal twice over, and this uses both.
+        animal ("Box: Box 1"), so the usual source is simply absent.
 
         The candidate is `parse_animal_ids(pl2)[bank]` — the .pl2 filename lists
-        its animals in bank order. A candidate alone is only a convention, so it
-        is returned ONLY if something corroborates it:
+        its animals in bank order. That alone is only a naming habit, so the
+        name is returned ONLY if the BEHAVIOR FILENAME corroborates it: those
+        are usually named for their animal (`G16-1 Raw Aquisition.csv`), and it
+        is matched against the names the .pl2 already offers rather than by
+        carving a token out of the filename, so no rule about which token holds
+        the ID and no chance of inventing a name that appears nowhere.
 
-        * **the behavior filename**, which usually contains the animal outright
-          (`G16-1 Raw Aquisition.csv`). Direct evidence, and it is matched
-          against the names the .pl2 already offers rather than by carving a
-          token out of the filename — so no rule about which token holds the ID,
-          and no chance of inventing a name that appears nowhere.
-        * **the stated box**, via the confirmed Box N -> bank N rig wiring
-          (Korey, plus the 2026 session notes).
+        **The stated box is deliberately NOT used.** It was, on the strength of
+        Box N -> bank N being confirmed for one acquisition day — but a box is
+        where the animal sat, and a bank is which headstage it wore, and nothing
+        stops headstage 1 going into box 2. Treating the two as interchangeable
+        made this both blank a CORRECT name (the box veto) and corroborate a
+        wrong one, on any session cabled differently. The division that matters
+        here is the headstage, which the channel numbering records directly.
 
-        Either alone is enough; both agree here. And anything pointing at the
-        OTHER animal vetoes the answer, because a behavior file paired with the
-        wrong channel group is exactly the mix-up the bank filtering exists to
-        prevent — one field over.
+        A behavior file naming the OTHER animal still vetoes the answer, because
+        a behavior file paired with the wrong channel group is exactly the mix-up
+        the bank filtering exists to prevent — one field over.
         """
         if not self.pl2_path or self.bank_index is None:
             return ""
@@ -315,16 +317,10 @@ class Session:
         candidate = names[self.bank_index]
 
         stem = Path(self.behavior_path).stem.lower() if self.behavior_path else ""
-        box = freezeframe_io.box_number(self.behavior_metadata)
-
         others = [n for i, n in enumerate(names) if i != self.bank_index]
         if any(other.lower() in stem for other in others):
             return ""                       # behavior file names another animal
-        if box is not None and box - 1 != self.bank_index:
-            return ""                       # behavior file states another box
-
-        corroborated = (candidate.lower() in stem) or (box == self.bank_index + 1)
-        return candidate if corroborated else ""
+        return candidate if candidate.lower() in stem else ""
 
     def channel_options(self):
         """(index, label) pairs for the channels this session may show or export.

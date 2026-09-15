@@ -59,14 +59,18 @@ from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button
 # File browse callbacks
 # ---------------------------------------------------------------------------
 
-def _bank_option_label(names, index, bank):
-    """One channel-group option: box and channel range, both facts about the file.
+def _bank_option_label(bank):
+    """One channel-group option: the channel range, and nothing else.
 
-    No animal name: the animal is chosen in its own dropdown. The two are
-    deliberately decoupled, because which animal sits on which headstage is in
-    the lab's notes, not in any file, so only the user can pair them.
+    The division here is the HEADSTAGE, which is what the channel numbering
+    records. A box number used to be shown alongside it, on the strength of
+    Box N -> bank N being confirmed for one acquisition day. That is cabling,
+    not a rig invariant — headstage 1 can perfectly well be plugged into box 2 —
+    so the label stated something the file does not know and that can change
+    between sessions. The animal is chosen in its own dropdown; the user pairs
+    the two, because only the user knows which animal wore which headstage.
     """
-    return f"Box {index + 1} · {bank['label']} ({len(bank['indices'])} ch)"
+    return f"{bank['label']} ({len(bank['indices'])} ch)"
 
 
 @callback(
@@ -100,19 +104,7 @@ def browse_neural(n_clicks):
         return path, Path(path).name, None, [], None, {"display": "none"}
 
     saved_bank = load_identity(path)["bank"]
-    # Box N -> bank N is confirmed rig wiring (Box 1 = FP01-FP05, Box 2 =
-    # FP17-FP21), so the box is a property of the file. The animal NAME is a
-    # weaker claim — it reads the .pl2 filename as listing animals in box order,
-    # which holds for "acquisition G16-1 and G20-3" but is a naming habit rather
-    # than a guarantee.
-    #
-    # It is shown anyway, because leaving it out made this unusable: the user has
-    # to pick their animal, and "Box 1 / Box 2" asks them to look it up somewhere
-    # else. Showing the name costs nothing, since selecting it only SEEDS the
-    # editable Animal field — nothing is asserted behind the user's back, and a
-    # wrong guess is a visible name they can correct rather than a silent one.
-    names = parse_animal_ids(path)
-    options = [{"label": _bank_option_label(names, i, b), "value": i}
+    options = [{"label": _bank_option_label(b), "value": i}
                for i, b in enumerate(banks)]
     row_style = {"display": "flex", "alignItems": "center", "marginTop": "3px"}
     return path, Path(path).name, saved_bank, options, saved_bank, row_style
