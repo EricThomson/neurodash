@@ -953,16 +953,65 @@ def update_figure(neural_path, behavior_path, selected_channels, spect_toggle,
 
 @callback(
     Output("btn-launch-viewer", "disabled"),
+    Output("btn-choose-video", "disabled"),
     Output("div-viewer-hint", "style"),
     Input("store-neural-path", "data"),
     Input("store-behavior-path", "data"),
 )
 def toggle_launch_button(neural_path, behavior_path):
+    """Both viewer buttons need a behavior file, so they enable together."""
     ready = bool(behavior_path)
     hint_style = {"display": "none"} if ready else {
         "marginTop": "4px", "fontSize": "0.8em", "color": "#999", "fontStyle": "italic",
     }
-    return not ready, hint_style
+    return not ready, not ready, hint_style
+
+
+@callback(
+    Output("store-video-path", "data", allow_duplicate=True),
+    Output("div-video-filename", "children", allow_duplicate=True),
+    Input("store-behavior-path", "data"),
+    prevent_initial_call=True,
+)
+def forget_video_on_new_behavior(behavior_path):
+    """A new behavior file must not inherit the last session's video.
+
+    `launch_viewer` reuses a stored video path BEFORE any lookup runs, and only
+    it ever wrote this store - so once a video was chosen it stuck across file
+    loads, and launching a different session silently drew the new tracking over
+    the old footage. Nothing on screen contradicts that: the position dot lands
+    somewhere plausible, and the arena frame-size guard cannot help when both
+    recordings are 640x480, which every open-field video here is.
+
+    Found the hard way - C43-1's rat tracking over an FC33-4 mouse video from
+    eight years earlier, through a mouse arena calibration 25% off the rat one.
+    """
+    return "", ""
+
+
+@callback(
+    Output("store-video-path", "data", allow_duplicate=True),
+    Output("div-video-filename", "children", allow_duplicate=True),
+    Input("btn-choose-video", "n_clicks"),
+    State("store-behavior-path", "data"),
+    prevent_initial_call=True,
+)
+def choose_video(n_clicks, behavior_path):
+    """Pick the video by hand, overriding whatever the viewer resolved.
+
+    Resolution is deliberately strict - it takes the basename the behavior file
+    states and accepts it only from that file's own directory - so it declines
+    more often than it guesses wrong. This is the escape hatch for when it
+    declines, and for when a previously chosen video turns out to be the wrong
+    one. Opens where the behavior file lives, which is where its video usually is.
+    """
+    if not n_clicks:
+        return no_update, no_update
+    start = str(Path(behavior_path).parent) if behavior_path else last_browse_dir()
+    path = pick_file("Select video file", "Video (*.avi *.mp4 *.wmv)", start)
+    if not path:
+        return no_update, no_update
+    return path, Path(path).name
 
 
 # ---------------------------------------------------------------------------

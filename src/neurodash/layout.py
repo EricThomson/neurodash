@@ -233,6 +233,14 @@ def _left_sidebar():
                     ),
                     html.Div(id="div-viewer-status", style={"marginTop": "6px"}),
                     html.Div(id="div-video-filename", style={"marginTop": "4px", "fontSize": "0.85em", "color": "#555"}),
+                    # The viewer remembers its video, which is what you want when
+                    # relaunching the same session and exactly what you don't want
+                    # when the remembered one is wrong. Without this the stored
+                    # path was unreachable: launch reuses it before any lookup
+                    # runs, so there was no way to say "not that one".
+                    html.Button("Choose video...", id="btn-choose-video", n_clicks=0,
+                                disabled=True,
+                                style={"marginTop": "6px", "fontSize": "0.8em"}),
                 ],
                 style=_VIEWER_SECTION,
             ),

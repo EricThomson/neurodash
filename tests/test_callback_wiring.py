@@ -10,6 +10,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from dash import no_update
 
 from neurodash import callbacks, channel_io
 from neurodash.app import create_app
@@ -70,6 +71,8 @@ def test_no_private_helper_is_decorated():
     "update_figure",
     "collect_epoch_params",
     "render_navigator",
+    "choose_video",
+    "forget_video_on_new_behavior",
 ])
 def test_expected_callback_is_registered(name):
     assert name in callback_function_names()
@@ -227,3 +230,42 @@ def test_fill_identity_reacts_to_the_channel_group():
     args = decorator_args("fill_identity")
     assert any(a.startswith('Input("store-bank"') for a in args), (
         "fill_identity must re-read the animal when the channel group changes")
+
+
+# --- the viewer's video must not outlive its session ------------------------
+# `launch_viewer` reuses a stored video path before any lookup runs, and it used
+# to be the only writer of that store. So a video chosen for one session stuck
+# across file loads and the next launch drew new tracking over old footage, with
+# nothing on screen to contradict it.
+
+def test_a_new_behavior_file_forgets_the_old_video():
+    assert callbacks.forget_video_on_new_behavior("/data/other.xlsx") == ("", "")
+
+
+def test_the_video_can_be_chosen_by_hand(monkeypatch):
+    """The escape hatch: strict resolution declines more often than it guesses."""
+    seen = {}
+
+    def fake_pick(title, pattern, start):
+        seen["start"] = start
+        return "/data/session/clip.avi"
+
+    monkeypatch.setattr(callbacks, "pick_file", fake_pick)
+    path, label = callbacks.choose_video(1, "/data/session/trial.xlsx")
+
+    assert path == "/data/session/clip.avi"
+    assert label == "clip.avi"
+    # opens where the behavior file lives, which is where its video usually is
+    assert "session" in seen["start"]
+
+
+def test_cancelling_the_video_picker_keeps_the_current_one(monkeypatch):
+    monkeypatch.setattr(callbacks, "pick_file", lambda *a: "")
+    assert callbacks.choose_video(1, "/data/trial.xlsx") == (no_update, no_update)
+
+
+def test_the_choose_video_button_exists():
+    """suppress_callback_exceptions hides a typo'd id: the callback just never fires."""
+    layout = create_app().layout
+    assert "btn-choose-video" in {c.id for c in layout._traverse()
+                                  if getattr(c, "id", None)}

@@ -97,8 +97,9 @@ def plot_session_view(session, controls):
         panels.append(("events", _plot_events))
 
     if session.has_behavior:
-        # Mobility + velocity on one panel, each shown raw and subsampled onto the
-        # export grid — the panel is the live check on what the export's binning costs.
+        # Mobility, velocity and activity on one normalized panel, each shown raw
+        # and subsampled onto the export grid — the panel is the live check on what
+        # the export's binning costs.
         #
         # Both panels are EthoVision-shaped. A FreezeFrame session has no x/y at
         # all (the camera is side-on) and reports Motion Index rather than
@@ -112,7 +113,7 @@ def plot_session_view(session, controls):
                 panels.append(("freezing", _plot_freezing))
         else:
             if controls.get("show_motion", True) and "Velocity" in columns:
-                panels.append(("motion", _plot_motion))
+                panels.append(("movement", _plot_movement))
             if controls.get("show_position", True) and "X center" in columns:
                 panels.append(("position", _plot_position))
 
@@ -135,10 +136,12 @@ def plot_session_view(session, controls):
         rows=n, cols=1,
         row_heights=row_heights,
         vertical_spacing=0.05,
-        # The motion panel carries two different units (% and cm/s), so it needs a
-        # right-hand axis; every other panel is single-axis.
-        specs=[[{"secondary_y": label in ("motion", "freezing")}]
-               for label, _ in panels],
+        # Only the acquisition freezing panel needs a right-hand axis (Motion Index
+        # against a 0/1 state). The open-field movement panel used to need one too,
+        # for % against cm/s; it now normalizes all three variables onto a single
+        # 0-1 axis, which gives back a y-axis slot and one less panel for
+        # `_axis_refs` to have to work around.
+        specs=[[{"secondary_y": label == "freezing"}] for label, _ in panels],
     )
 
     for i, (label, plot_fn) in enumerate(panels, start=1):
@@ -177,8 +180,47 @@ def plot_session_view(session, controls):
         hovermode="x",
         spikedistance=-1,
     )
+    _show_movement_legend(fig, panels)
 
     return fig, content_px
+
+
+def _show_movement_legend(fig, panels):
+    """Turn on a legend for the movement panel, and for nothing else.
+
+    Plotly's legend is figure-level, so "a legend on one panel" is really "one
+    legend, positioned over that panel, listing only its traces". The movement
+    traces opt in by carrying a legendgroup, which lets everything else be
+    suppressed here in one call rather than at a dozen separate `add_trace` sites.
+
+    It is placed INSIDE the panel, top-left, the way `_plot_position` labels its X
+    and Y traces: the label belongs to the panel, so it should sit in the panel
+    and move with it when panels are added, removed or resized. A legend is used
+    rather than `_plot_position`'s plain annotations because with three heavily
+    overlapping traces, clicking an entry to hide one is worth having.
+
+    Plotly's legend can only be positioned in paper coordinates, so "inside this
+    panel" is computed from the subplot's own domain rather than stated as a
+    constant - which is also what makes it follow the panel.
+    """
+    row = next((i for i, (label, _) in enumerate(panels, start=1)
+                if label == "movement"), None)
+    if row is None:
+        return  # no movement panel: leave showlegend False, or plotly draws an
+                # empty legend box in the corner of the figure
+    fig.update_traces(showlegend=False, selector=lambda trace: not trace.legendgroup)
+    subplot = fig.get_subplot(row, 1)
+    fig.update_layout(
+        showlegend=True,
+        legend=dict(orientation="h",
+                    x=subplot.xaxis.domain[0] + 0.004, xanchor="left",
+                    y=subplot.yaxis.domain[1] - 0.008, yanchor="top",
+                    font=dict(size=11),
+                    # Translucent like the position panel's X/Y labels, so a
+                    # trace passing behind the legend is still followable.
+                    bgcolor="rgba(255,255,255,0.7)", borderwidth=0,
+                    tracegroupgap=8),
+    )
 
 
 def _add_ttl_pulses(fig, session, controls):
@@ -420,6 +462,11 @@ def _add_epoch_bands(fig, session, controls):
 def velocity_ylim(v):
     """Return (y_min, y_max) for velocity display.
 
+    For the places that still give velocity an axis of its own: pyqtdash and the
+    standalone behavior figure. The Session Viewer's movement panel shares one
+    normalized axis across three variables, so it divides by `movement_scale`
+    instead of reading a limit from here. Both cap at the same percentile.
+
     Parameters
     ----------
     v : np.ndarray
@@ -428,25 +475,35 @@ def velocity_ylim(v):
     -------
     (float, float)
     """
-    return (-1.0, float(np.nanpercentile(v, 99.9)))
+    return (-1.0, float(np.nanpercentile(v, config.BEHAVIOR_YMAX_PERCENTILE)))
 
 
-def mobility_ylim(m):
-    """Return (y_min, y_max) for mobility (%) display.
+def movement_scale(values):
+    """The divisor that puts `values` on the movement panel's 0-1 axis.
 
-    Most of the action sits in the low percentages, so cap the top at a high
-    percentile rather than the full 0–100 range. Floored at 0 (a percentage
-    can't be negative).
+    Mobility (%), Velocity (cm/s) and Activity (%) are three different
+    measurements on three unrelated scales - on the test session Activity's
+    entire range is 9% of Mobility's axis and its median sits at 0.7% of panel
+    height - so they can only share an axis once each is divided by its own value
+    at BEHAVIOR_YMAX_PERCENTILE. Samples above that percentile land above 1.0 and
+    are clipped by the axis, which is exactly what happened when each variable
+    had its own axis topped at the same percentile.
+
+    Returns 1.0 for an all-NaN or non-positive series, so a degenerate column
+    draws flat rather than raising or filling the panel with infinities.
 
     Parameters
     ----------
-    m : np.ndarray
+    values : np.ndarray
 
     Returns
     -------
-    (float, float)
+    float
     """
-    return (0.0, float(np.nanpercentile(m, 99.9)))
+    if not np.any(np.isfinite(values)):
+        return 1.0
+    top = float(np.nanpercentile(values, config.BEHAVIOR_YMAX_PERCENTILE))
+    return top if top > 0 else 1.0
 
 
 def _axis_refs(fig, row):
@@ -912,80 +969,112 @@ def _plot_freezing(fig, row, session, controls):
                      fixedrange=True)
 
 
-def _plot_motion(fig, row, session, controls):
-    """Mobility (%) and velocity (cm/s), each raw and subsampled onto the export grid.
+def _plot_movement(fig, row, session, controls):
+    """Mobility, Velocity and Activity on one normalized axis, named by a legend.
 
-    Four traces on a dual axis: mobility owns the left (orange), velocity the right
-    (green); within each colour the faint line is raw at the EthoVision rate and the
-    solid one is what `_analysis.csv` contains (same grid, same 0.1 s bins). So the
-    panel is the live check on what the export's subsampling costs.
+    Each variable is drawn twice - faint is raw at the EthoVision rate, solid is
+    what `_analysis.csv` contains (same grid, same 0.1 s bins) - so the panel
+    stays the live check on what the export's subsampling costs.
 
-    Only the subsampled traces carry hover — four values changing at once under the
-    crosshair is unreadable, and the raw traces are there to be seen, not read off.
+    **Why normalized.** These are three unrelated scales, and two of them are even
+    the same unit: Mobility is % of body area changed, Activity is % of pixels
+    changed, and Activity's entire range is 9% of Mobility's axis with its median
+    at 0.7% of panel height. A shared raw axis pins Activity to the floor, and a
+    third overlaying axis is the kind of layering the events panel already lost a
+    night to. So each series is divided by its own `movement_scale` and the axis
+    reads 0-1.
 
-    Dots track the theta marker controls, since the subsampled traces share the theta
-    channels' time bins. They need the spectral grid, so without neural data only the
-    raw traces are drawn (and they take the hover instead).
+    Normalizing costs the ability to read a value off the axis, which the raw
+    values in `customdata` buy back: the tooltip still says "Mobility: 3.2 %"
+    while the drawn y is a fraction. It costs nothing for the raw-vs-binned
+    comparison, since a variable's two traces share one divisor.
+
+    Three series cannot be labelled by colour-matched axis titles - a panel has
+    only two sides - so this is the one panel in the figure carrying a legend.
+    A variable's two traces share a `legendgroup`, so clicking its entry toggles
+    the pair; `plot_session_view` positions the legend and keeps every other
+    trace out of it.
+
+    Dots track the theta marker controls, since the subsampled traces share the
+    theta channels' time bins. They need the spectral grid, so without neural data
+    only the raw traces are drawn, and they take the hover and the legend instead.
     """
     t = session.behavior_data["Recording time"].to_numpy(dtype=float)
-    has_mobility = "Mobility" in session.behavior_data.columns
+    columns = session.behavior_data.columns
 
     times = None
     if session.has_neural:
         try:
             times, _peak, _power, _ratio = _theta_channels(session, controls)
         except Exception as e:
-            print(f"ERROR getting spectral grid for motion panel: {e}")
+            print(f"ERROR getting spectral grid for movement panel: {e}")
     step = controls.get("spect_step_sec", config.DEFAULT_SPECT_STEP_SEC)
     mode = "lines+markers" if controls.get("theta_peak_markers", config.DEFAULT_SHOW_MARKER_DOTS) else "lines"
     size = controls.get("theta_peak_dot_size", config.DEFAULT_THETA_DOT_SIZE)
+    has_binned = times is not None
 
-    def add_channel(values, colour, faint, label, unit, fmt, on_right):
-        """Raw trace (no hover) plus its subsampled counterpart (which carries it)."""
-        has_binned = times is not None
+    def add_variable(label, values, unit, fmt):
+        """One variable: its raw trace, its subsampled trace, one legend entry."""
+        scale = movement_scale(values)
+        colour = config.MOVEMENT_COLORS[label]
+        hover = f"{label}: %{{customdata:{fmt}}}{unit}<extra></extra>"
         fig.add_trace(
             go.Scattergl(
-                x=t, y=values, mode="lines",
-                name=f"{label} (raw)",
-                line=dict(color=faint, width=0.7),
-                # Hover belongs to the subsampled trace; when there isn't one, raw takes it.
+                x=t, y=values / scale, mode="lines",
+                name=f"{label} (raw)" if has_binned else label,
+                legendgroup=label, showlegend=not has_binned,
+                line=dict(color=config.MOVEMENT_FAINT_COLORS[label], width=0.7),
+                # The real values, so a normalized axis doesn't cost the tooltip.
+                customdata=values,
+                # Hover belongs to the subsampled trace; without one, raw takes it.
                 hoverinfo="skip" if has_binned else None,
-                hovertemplate=None if has_binned
-                else f"{label}: %{{y:{fmt}}}{unit}<extra></extra>",
+                hovertemplate=None if has_binned else hover,
             ),
-            row=row, col=1, secondary_y=on_right,
+            row=row, col=1,
         )
         if has_binned:
+            binned = window_average(t, values, times, step)
             fig.add_trace(
                 go.Scattergl(
-                    x=times, y=window_average(t, values, times, step), mode=mode,
-                    name=label,
+                    x=times, y=binned / scale, mode=mode, name=label,
+                    legendgroup=label, showlegend=True,
                     line=dict(color=colour, width=1.0),
                     marker=dict(color=colour, size=size),
-                    hovertemplate=f"{label}: %{{y:{fmt}}}{unit}<extra></extra>",
+                    customdata=binned,
+                    hovertemplate=hover,
                 ),
-                row=row, col=1, secondary_y=on_right,
+                row=row, col=1,
             )
 
-    # Mobility on the left axis — skipped gracefully if the file lacks the column,
-    # in which case velocity takes the left axis as the only trace.
-    if has_mobility:
-        m = session.behavior_data["Mobility"].to_numpy(dtype=float)
-        add_channel(m, "darkorange", "rgba(255,140,0,0.40)", "Mobility", "%", ".1f", False)
-        fig.update_yaxes(
-            title_text="Mobility (%)", title_font=dict(color="darkorange"),
-            tickfont=dict(color="darkorange"),
-            range=list(mobility_ylim(m)), fixedrange=True,
-            row=row, col=1, secondary_y=False,
-        )
+    # Declaration order is legend order. Mobility and Velocity keep the colours
+    # they had when each owned an axis. Activity is absent from every file
+    # exported before Sep 2026, so it simply draws nothing on those.
+    if "Mobility" in columns:
+        add_variable("Mobility",
+                     session.behavior_data["Mobility"].to_numpy(dtype=float), "%", ".1f")
+    add_variable("Velocity",
+                 session.behavior_data["Velocity"].to_numpy(dtype=float), " cm/s", ".1f")
+    if "Activity" in columns:
+        # Two decimals: Activity's median is 0.12% on the test session, so one
+        # would round most of the recording to a single digit.
+        add_variable("Activity",
+                     session.behavior_data["Activity"].to_numpy(dtype=float), "%", ".2f")
 
-    v = session.behavior_data["Velocity"].to_numpy(dtype=float)
-    add_channel(v, "seagreen", "rgba(46,139,87,0.40)", "Velocity", " cm/s", ".1f", has_mobility)
+    # The panel's name goes above it as a title, because the axis label has to
+    # say what the NUMBERS are and "0-1 because each variable was divided by its
+    # own percentile" is the one thing a reader could otherwise get wrong here.
+    xref, yref = _axis_refs(fig, row)
+    fig.add_annotation(
+        x=0.5, y=1.0, text="Movement Variables",
+        xref=f"{xref} domain", yref=f"{yref} domain",
+        showarrow=False, xanchor="center", yanchor="bottom",
+        font=dict(size=12, color="#444"),
+    )
     fig.update_yaxes(
-        title_text="Velocity (cm/s)", title_font=dict(color="seagreen"),
-        tickfont=dict(color="seagreen"),
-        range=list(velocity_ylim(v)), fixedrange=True, showgrid=False,
-        row=row, col=1, secondary_y=has_mobility,
+        # 2% of padding either side so a trace resting at 0 (Activity is exactly
+        # zero on 22% of frames) is not bisected by the panel border.
+        title_text="Movement (Normalized)", range=[-0.02, 1.02],
+        fixedrange=True, row=row, col=1,
     )
 
 

@@ -124,6 +124,38 @@ ACQUISITION_EPOCH_PARAMS = {
 # still leaves ordinary behavior in the bottom fifth of the panel. p99 clips ~1%.
 MOTION_YMAX_PERCENTILE = 99.0
 
+# The open-field movement panel draws Mobility (%), Velocity (cm/s) and Activity
+# (%) together, so each is scaled by its own value at this percentile and the
+# panel's axis runs 0-1. Shared rather than written per series: the three would
+# otherwise drift apart and the traces would stop being comparable, which is the
+# only reason to put them on one axis in the first place. Anything above the
+# percentile clips at the top of the axis, exactly as it did when each series had
+# its own axis topped at the same number.
+BEHAVIOR_YMAX_PERCENTILE = 99.9
+
+# One colour per movement variable, named in the panel's legend. Orange and green
+# are unchanged from when Mobility and Velocity owned an axis each and were
+# labelled by colour-matched axis titles.
+#
+# Activity is grey rather than black. It is drawn last so it sits on top of the
+# other two, and at full black that combination reads as the only real trace on
+# the panel - it visually outranks variables it is merely correlated with (0.67
+# with Mobility, 0.70 with Velocity). A dark grey keeps it clearly the darkest
+# line without swamping them.
+MOVEMENT_COLORS = {"Mobility": "darkorange", "Velocity": "seagreen",
+                   "Activity": "#555555"}
+MOVEMENT_FAINT_COLORS = {"Mobility": "rgba(255,140,0,0.40)",
+                         "Velocity": "rgba(46,139,87,0.40)",
+                         "Activity": "rgba(85,85,85,0.30)"}
+
+# The same variables on pyqtdash's DARK background. NOT a duplicate of the dict
+# above: those are chosen against white, and the grey that reads as "the dark
+# reference line" there is nearly invisible here. What has to stay in step is the
+# ROLE - green is velocity in both, achromatic is activity in both - so a change
+# of meaning is one edit in one file. Velocity keeps the exact pure green the
+# viewer has always drawn it in.
+MOVEMENT_COLORS_DARK_BG = {"Velocity": "#00ff00", "Activity": "#d0d0d0"}
+
 DEFAULT_SHOW_EPOCHS = True
 
 # Raw TTL onsets as black lines. A diagnostic rather than a display: the epoch and

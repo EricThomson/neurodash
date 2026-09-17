@@ -32,12 +32,13 @@ from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QIcon, QPalette
 
 from neurodash import arena_io
-from neurodash.plot_utils import velocity_ylim, spectrogram_levels
+from neurodash.plot_utils import velocity_ylim, movement_scale, spectrogram_levels
 from neurodash.behavior_io import (
     load_behavior_file, get_recording_delay, estimate_position_pixels,
     behavior_time, behavior_format, FREEZEFRAME,
 )
-from neurodash.config import MOTION_YMAX_PERCENTILE, EVENT_SERIES_COLORS
+from neurodash.config import (MOTION_YMAX_PERCENTILE, EVENT_SERIES_COLORS,
+                             MOVEMENT_COLORS_DARK_BG)
 from neurodash.freezeframe_io import MOTION_COLUMN, freezing_state
 
 # Spatial calibration comes from ~/.neurodash/arenas via the Arena pulldown; see
@@ -215,6 +216,9 @@ class NeurodashViewer(QMainWindow):
         self.has_position = False
         self.motion = None
         self.freezing = None
+        # Only the Sep 2026 EthoVision re-exports carry it; every earlier file
+        # simply has no such column.
+        self.activity = None
         # The position-dependent widgets are only built when there are tracked
         # coordinates, so default them here — otherwise a session with video but
         # no x/y (FreezeFrame) reaches the arena setup with them undefined.
@@ -243,6 +247,12 @@ class NeurodashViewer(QMainWindow):
                 # the raw trace — the raw-vs-subsampled comparison is a QC question that
                 # lives in the Dash Session Viewer, not something you ask while scrubbing video.
                 self.velocity = behavior["Velocity"].to_numpy(dtype=float)
+                if "Activity" in behavior.columns:
+                    # Percentage of PIXELS that changed between video frames -
+                    # the same kind of measure as FreezeFrame's Motion Index, and
+                    # the one variable here computed FROM the video, which is why
+                    # it is worth watching against the picture.
+                    self.activity = behavior["Activity"].to_numpy(dtype=float)
         else:
             recording_delay_s = 0.0
 
@@ -503,7 +513,6 @@ class NeurodashViewer(QMainWindow):
         if has_behavior and self.has_position:
             pos_ymin = np.nanpercentile(np.concatenate([self.x_cm, self.y_cm]), 10)
             pos_ymax = np.nanpercentile(np.concatenate([self.x_cm, self.y_cm]), 90)
-            _, vel_ymax = velocity_ylim(self.velocity)
 
             self.pos_plot = pg.PlotWidget(title="Position (cm)")
             self.pos_plot.addLegend(offset=(-1, 1), brush=pg.mkBrush(50, 50, 50, 200))
@@ -514,15 +523,48 @@ class NeurodashViewer(QMainWindow):
             self.pos_plot.addItem(self.pos_cursor)
             behav_layout.addWidget(self.pos_plot)
 
-            self.vel_plot = pg.PlotWidget(title="Velocity (cm/s)")
-            self.vel_plot.plot(self.t_behav, self.velocity, pen=pg.mkPen("g", width=1))
-            self.vel_plot.setYRange(0, vel_ymax, padding=0.05)
-            self.vel_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
-            self.vel_plot.addItem(self.vel_cursor)
-            behav_layout.addWidget(self.vel_plot)
+            # Movement: velocity, plus activity when the export carries it.
+            # They are different scales (cm/s against %), so sharing one panel
+            # means dividing each by its own high percentile - the same
+            # `movement_scale` the Session Viewer's movement panel uses, so the
+            # two viewers draw the same shape.
+            #
+            # A LONE velocity trace is deliberately NOT normalized. There is no
+            # hover in this viewer to carry the real value the way customdata
+            # does in Dash, so scaling one series to 0-1 would cost the reading
+            # and buy nothing - there is no second scale to reconcile it with.
+            # Every open-field file exported before Sep 2026 takes that branch.
+            movement = [("Velocity", self.velocity)]
+            if self.activity is not None:
+                movement.append(("Activity", self.activity))
 
-            self._behav_plots = [self.pos_plot, self.vel_plot]
-            self._behav_cursors = [self.pos_cursor, self.vel_cursor]
+            if len(movement) == 1:
+                self.movement_plot = pg.PlotWidget(title="Velocity (cm/s)")
+                self.movement_plot.plot(
+                    self.t_behav, self.velocity,
+                    pen=pg.mkPen(MOVEMENT_COLORS_DARK_BG["Velocity"], width=1))
+                self.movement_plot.setYRange(0, velocity_ylim(self.velocity)[1],
+                                             padding=0.05)
+            else:
+                self.movement_plot = pg.PlotWidget(title="Movement (Normalized)")
+                # Named by a legend, as pos_plot names X against Y. A right-hand
+                # axis is not an option here: these panels are independent
+                # PlotWidgets sharing a pinned gutter width, so hanging one on
+                # this plot would shift it against its neighbours.
+                self.movement_plot.addLegend(offset=(-1, 1),
+                                             brush=pg.mkBrush(50, 50, 50, 200))
+                for label, values in movement:
+                    self.movement_plot.plot(
+                        self.t_behav, values / movement_scale(values), name=label,
+                        pen=pg.mkPen(MOVEMENT_COLORS_DARK_BG[label], width=1))
+                self.movement_plot.setYRange(0, 1, padding=0.05)
+
+            self.movement_cursor = pg.InfiniteLine(angle=90, pen=pg.mkPen("w", width=2))
+            self.movement_plot.addItem(self.movement_cursor)
+            behav_layout.addWidget(self.movement_plot)
+
+            self._behav_plots = [self.pos_plot, self.movement_plot]
+            self._behav_cursors = [self.pos_cursor, self.movement_cursor]
 
         # One gutter width for every stacked behavior panel, so their plot areas
         # start at the same x and the time axes line up. Outside both branches on
