@@ -10,8 +10,9 @@ import json
 import pytest
 
 from neurodash import channel_io
+from neurodash.filename_metadata import parse_animal_id
 from neurodash.channel_io import (
-    canonical_id, channel_notes_path, load_identity, parse_animal_id,
+    canonical_id, channel_notes_path, load_identity,
     resolve_animal_id, resolve_session_name, save_channels, save_identity,
 )
 

@@ -24,8 +24,9 @@ from neurodash.neural_io import (
 from neurodash.spectral_utils import compute_multitaper_spectrogram
 from neurodash.behavior_io import behavior_time, load_behavior_file
 from neurodash import freezeframe_io
-from neurodash.channel_io import (
-    load_identity, parse_animal_ids, resolve_animal_id,
+from neurodash.channel_io import load_identity, resolve_animal_id
+from neurodash.filename_metadata import (
+    animal_for_bank, names_another_animal, parse_session_type,
 )
 
 
@@ -224,10 +225,14 @@ class Session:
         windows defined by the TTLs, and they are precisely the windows a control
         is compared against. The TTL overlay is likewise untouched, since it shows
         what the rig did rather than what the animal got.
+
+        Whether a shock happened is asked of `shock_delivered`, not of `no_shock`
+        directly: a tone session delivers none either, for a completely different
+        reason.
         """
         trial = self.trial_events
         spans = epochs.event_spans(trial["tones"], trial["shocks"], params)
-        if self.no_shock:
+        if not self.shock_delivered:
             return [s for s in spans if s["kind"] != "shock_event"]
         return spans
 
@@ -265,62 +270,58 @@ class Session:
     def _names_another_bank(self, name):
         """True when `name` is this recording's OTHER animal.
 
-        The behavior file's own header normally settles the animal, and on a
-        single-animal file it should. On a two-animal .pl2 it can also be the
-        wrong file for the channel group selected, and then it is worse than no
-        answer: it labels one animal's ephys with its neighbour's name, silently.
-        So the header still wins, but not against the recording itself.
-
-        Punctuation is folded for the comparison only, never in storage: the raw
-        CSV writes `G20_3` where the .pl2 filename and the 1-s xlsx write
-        `G20-3`, and a literal match would miss it.
+        See `filename_metadata.names_another_animal` - the behavior header still
+        wins over the pl2 filename, but not against the recording itself.
         """
-        names = parse_animal_ids(self.pl2_path)
-        if self.bank_index is None or self.bank_index >= len(names):
-            return False
-        fold = lambda text: text.strip().lower().replace("_", "-")
-        mine = fold(names[self.bank_index])
-        others = {fold(n) for i, n in enumerate(names) if i != self.bank_index}
-        return fold(name) in others - {mine}
+        return names_another_animal(self.pl2_path, self.bank_index, name)
 
     def _animal_from_recording(self):
-        """Name this animal when the behavior file's contents don't.
+        """Name this animal when the behavior file's CONTENTS don't.
 
-        Some FreezeFrame exports name the BOX on the row where others name the
-        animal ("Box: Box 1"), so the usual source is simply absent.
-
-        The candidate is `parse_animal_ids(pl2)[bank]` — the .pl2 filename lists
-        its animals in bank order. That alone is only a naming habit, so the
-        name is returned ONLY if the BEHAVIOR FILENAME corroborates it: those
-        are usually named for their animal (`G16-1 Raw Aquisition.csv`), and it
-        is matched against the names the .pl2 already offers rather than by
-        carving a token out of the filename, so no rule about which token holds
-        the ID and no chance of inventing a name that appears nowhere.
-
-        **The stated box is deliberately NOT used.** It was, on the strength of
-        Box N -> bank N being confirmed for one acquisition day — but a box is
-        where the animal sat, and a bank is which headstage it wore, and nothing
-        stops headstage 1 going into box 2. Treating the two as interchangeable
-        made this both blank a CORRECT name (the box veto) and corroborate a
-        wrong one, on any session cabled differently. The division that matters
-        here is the headstage, which the channel numbering records directly.
-
-        A behavior file naming the OTHER animal still vetoes the answer, because
-        a behavior file paired with the wrong channel group is exactly the mix-up
-        the bank filtering exists to prevent — one field over.
+        See `filename_metadata.animal_for_bank`: the .pl2 filename lists animals
+        in bank order, and the answer is used only when the behavior FILENAME
+        corroborates it.
         """
-        if not self.pl2_path or self.bank_index is None:
-            return ""
-        names = parse_animal_ids(self.pl2_path)
-        if self.bank_index >= len(names):
-            return ""
-        candidate = names[self.bank_index]
+        return animal_for_bank(self.pl2_path, self.behavior_path, self.bank_index)
 
-        stem = Path(self.behavior_path).stem.lower() if self.behavior_path else ""
-        others = [n for i, n in enumerate(names) if i != self.bank_index]
-        if any(other.lower() in stem for other in others):
-            return ""                       # behavior file names another animal
-        return candidate if candidate.lower() in stem else ""
+    @property
+    def session_type(self):
+        """'acquisition', 'tone', 'context', or '' - from the .pl2 FILENAME.
+
+        Nothing inside the files can answer this. A tone session's .pl2 is
+        structurally identical to an acquisition one: same EVT01 x5 tones, same
+        EVT02 x5 forty seconds later, same 222 s ITI, same duration, because a
+        tone test runs the same program in a different chamber to see what the
+        animal learned. Open field states no type and correctly reports ''.
+
+        This is a deliberate exception to the app's data-driven rule. That rule
+        held while the events distinguished the session types; tone is the first
+        case where they do not.
+        """
+        return parse_session_type(self.pl2_path)
+
+    @property
+    def shock_delivered(self):
+        """Whether the shock TTL stands for a shock this animal actually got.
+
+        False for two unrelated reasons, and conflating them would be a mistake:
+
+        - a **tone session** delivers no shock to ANYONE. The rig fires EVT02 on
+          the same schedule as acquisition, but the point of the session is to
+          play the tone and watch the response. This is a property of the session
+          type, so it is read off the filename and needs no input from the user.
+        - a **no-shock control animal** in an acquisition session. The shock TTL
+          fires rig-wide but only one box is wired to deliver it, and nothing in
+          any file says which. That one is the experimenter's to state, via the
+          No shock checkbox.
+
+        Keeping the two apart is why the checkbox is hidden outside acquisition:
+        a tone session must not depend on somebody remembering to tick a control
+        that does not apply to it.
+        """
+        if self.session_type == "tone":
+            return False
+        return not self.no_shock
 
     def channel_options(self):
         """(index, label) pairs for the channels this session may show or export.

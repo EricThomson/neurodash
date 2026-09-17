@@ -21,6 +21,9 @@ from pathlib import Path
 import pandas as pd
 
 from neurodash.behavior_io import get_mouse_id, get_session_name
+from neurodash.filename_metadata import (
+    parse_animal_id, parse_animal_ids, parse_session_type,
+)
 
 SCHEMA_VERSION = 2
 
@@ -29,49 +32,6 @@ def channel_notes_path(pl2_path):
     """Where a recording's annotations are kept: <stem>.channels.json, beside the .pl2."""
     pl2_path = Path(pl2_path)
     return pl2_path.parent / (pl2_path.stem + ".channels.json")
-
-
-def parse_animal_id(pl2_path):
-    """Best-effort animal ID from a pl2 filename: the last token, splitting on
-    whitespace *or* underscores. Handles both conventions seen in the wild —
-    '170505_open_field_theta_FC33-4' and '170505 open field theta FC33-4' both
-    -> 'FC33-4'. Single-animal only; returns '' when no path is given.
-
-    The weakest source, and only a starting guess: the sidebar's Animal field can
-    be corrected when a filename doesn't end in the animal token. Renaming the file
-    used to be the only fix — see the filename-handling note in CLAUDE.md.
-    """
-    if not pl2_path:
-        return ""
-    stem = Path(pl2_path).stem.strip()
-    return re.split(r"[\s_]+", stem)[-1] if stem else ""
-
-
-def parse_animal_ids(pl2_path):
-    """Every animal named in a pl2 filename, in order.
-
-    Two-animal recordings are named "acquisition G16-1 and G20-3", so the parts
-    are split on " and " and each contributes its last token — the same rule
-    `parse_animal_id` uses for a single animal.
-
-    **The order is assumed to match the channel-bank order** (first animal named
-    -> lowest-numbered headstage bank), which is what lets the app say "G20-3 is
-    FP17-FP21" instead of making you work it out. That is a lab convention, not
-    something any file states: it agrees with the 1-s xlsx putting G20-3 in
-    `Box 2`, and it is being confirmed with NIH. Until then it seeds a default the
-    user can override, and the behavior file still outranks it — see
-    Session.animal_id.
-
-    Returns [] when no path is given.
-    """
-    if not pl2_path:
-        return []
-    stem = Path(pl2_path).stem.strip()
-    if not stem:
-        return []
-    parts = re.split(r"\s+and\s+", stem, flags=re.IGNORECASE)
-    return [canonical_id(re.split(r"[\s_]+", part.strip())[-1])
-            for part in parts if part.strip()]
 
 
 def canonical_id(value, lowercase=False):
@@ -121,15 +81,22 @@ def resolve_animal_id(pl2_path, behavior_metadata=None, filename_fallback=True):
     return canonical_id(parse_animal_id(pl2_path))
 
 
-def resolve_session_name(behavior_metadata=None):
+def resolve_session_name(behavior_metadata=None, pl2_path=None):
     """The inferred session label, canonicalized: 'hab 1' -> 'hab1'.
 
-    Blank when the recording has no Session field at all (FC33-4 doesn't) — there
-    is nothing to guess from, so the sidebar shows it empty for a human to fill.
+    The behavior file's own Session field wins; the .pl2 filename's session type
+    ('acquisition', 'tone', 'context') is the fallback. The fear rig's second
+    exporter states no Trial/Session key at all, so on those files the filename is
+    the only thing that names the session - and it names it well, since the type
+    IS the session label in the lab's model (`Session.phase`).
+
+    Blank when neither says anything (FC33-4 has no Session field and its filename
+    names no type), so the sidebar shows it empty for a human to fill. Editable
+    either way - this only seeds it.
     """
-    if not behavior_metadata:
-        return ""
-    return canonical_id(get_session_name(behavior_metadata), lowercase=True)
+    stated = (canonical_id(get_session_name(behavior_metadata), lowercase=True)
+              if behavior_metadata else "")
+    return stated or parse_session_type(pl2_path)
 
 
 def load_identity(pl2_path, bank=None):

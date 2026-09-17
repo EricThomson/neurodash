@@ -47,9 +47,9 @@ from neurodash.plot_utils import normalize_lfp_traces, plot_session_view, plot_c
 from neurodash.session import (
     load_session_from_paths, compute_spectrogram, compute_theta_channels,
 )
+from neurodash.filename_metadata import parse_animal_ids
 from neurodash.channel_io import (
     load_channels, save_channels, resolve_animal_id, resolve_session_name,
-    parse_animal_ids,
     load_identity, save_identity, canonical_id,
 )
 from neurodash.layout import build_channel_view, exemplar_glyph, exemplar_button_style
@@ -240,16 +240,25 @@ def render_neural_metadata(neural_path, behavior_path):
     Input("store-bank", "data"),
 )
 def render_no_shock(neural_path, behavior_path, bank_index):
-    """Show the control checkbox only where a shock TTL exists, and restore it.
+    """Show the control checkbox only for ACQUISITION sessions, and restore it.
 
     Open field has no shocks, so it never sees this. Per-bank, like the animal:
     the two animals in one .pl2 are a control/shocked pair.
+
+    **A tone session hides it even though its shock TTL fires.** Its EVT02 looks
+    exactly like acquisition's, but no animal is shocked in a tone test, so the
+    answer is a property of the session type rather than something to ask the
+    experimenter. Offering the checkbox there would invite the reading that a
+    tone session is shocked unless somebody remembers to say otherwise - see
+    `Session.shock_delivered`.
     """
     if not neural_path:
         return {"display": "none"}, []
     session = load_session_from_paths(neural_path, behavior_path or "",
                                       bank_index=bank_index)
     if session.trial_events["shocks"] is None:
+        return {"display": "none"}, []
+    if session.session_type != "acquisition":
         return {"display": "none"}, []
     saved = load_identity(neural_path, bank_index)["no_shock"]
     return ({"display": "block", "marginTop": "4px"}, ["on"] if saved else [])
@@ -300,7 +309,7 @@ def fill_identity(neural_path, behavior_path, bank_index):
                                       bank_index=bank_index)
     saved = load_identity(session.pl2_path, session.bank_index)
     animal = saved["animal"] or session.animal_id
-    label = saved["session"] or resolve_session_name(session.behavior_metadata)
+    label = saved["session"] or resolve_session_name(session.behavior_metadata, session.pl2_path)
     return _animal_options(neural_path, behavior_path, animal), animal, label
 
 
@@ -1830,7 +1839,7 @@ def export_analysis_csv(n_clicks, neural_path, behavior_path, save_channels,
     # corrected them, and a correction is the only way to fix free text somebody
     # typed into EthoVision.
     animal = canonical_id(animal_field or "") or session.animal_id
-    session_name = canonical_id(session_field or "", lowercase=True) or         resolve_session_name(session.behavior_metadata)
+    session_name = canonical_id(session_field or "", lowercase=True) or         resolve_session_name(session.behavior_metadata, session.pl2_path)
     if not animal:
         return _NO_ANIMAL_HINT
     if not session_name:

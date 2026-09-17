@@ -263,7 +263,7 @@ def test_a_blank_override_falls_back_to_inference():
     ("", []),
 ])
 def test_parse_animal_ids(stem, expected):
-    from neurodash.channel_io import parse_animal_ids
+    from neurodash.filename_metadata import parse_animal_ids
     path = f"/data/{stem}.pl2" if stem else ""
     assert parse_animal_ids(path) == expected
 
