@@ -242,3 +242,48 @@ def test_export_dir_is_separate_from_the_browse_dir(tmp_path, isolated_state):
     app_state.remember_export_dir(out / "rec_analysis.csv")
     assert app_state.last_browse_dir() == str(raw)
     assert app_state.last_export_dir() == str(out)
+
+
+# --- naming the animal BEFORE picking its channels -------------------------
+# The ordinary order on a two-animal file is: load the .pl2, name the animal,
+# then pick its channel group. That lost the name: `save_identity` with no bank
+# writes a scalar `animal_override` with "bank": null, and `_saved_animal` asked
+# `data["bank"] == bank`, so None == 0 was False and the name read back blank.
+# Worse, the save that `choose_bank` then performs clears the scalar, so the name
+# was destroyed on disk rather than merely hidden.
+
+def test_an_animal_named_before_its_channels_survives_picking_them(tmp_path):
+    from neurodash import callbacks
+
+    for bank in (0, 1):
+        pl2 = tmp_path / f"context G16-1 and G20-3 {bank}.pl2"
+        pl2.write_bytes(b"")
+        callbacks.save_identity_edits("G16-1", "context", str(pl2))
+        assert load_identity(str(pl2), bank)["animal"] == "G16-1", "vanished on read"
+        callbacks.choose_bank(bank, str(pl2))
+        assert load_identity(str(pl2), bank)["animal"] == "G16-1", "destroyed on save"
+
+
+def test_a_bankless_name_files_under_the_group_actually_chosen(tmp_path):
+    """It belongs to whichever group is picked - there is no other candidate."""
+    from neurodash import callbacks
+    import json
+
+    pl2 = tmp_path / "context G16-1 and G20-3.pl2"
+    pl2.write_bytes(b"")
+    callbacks.save_identity_edits("G20-3", "context", str(pl2))
+    callbacks.choose_bank(1, str(pl2))
+
+    stored = json.loads(channel_notes_path(pl2).read_text())
+    assert stored["animal_overrides"] == {"1": "G20-3"}
+    assert load_identity(str(pl2), 0)["animal"] == "", "must not leak to the other group"
+
+
+def test_two_animals_stay_on_their_own_banks(tmp_path):
+    """The invariant the fix must not break."""
+    pl2 = tmp_path / "context G16-1 and G20-3.pl2"
+    pl2.write_bytes(b"")
+    save_identity(str(pl2), "G16-1", "context", bank=0)
+    save_identity(str(pl2), "G20-3", "context", bank=1)
+    assert load_identity(str(pl2), 0)["animal"] == "G16-1"
+    assert load_identity(str(pl2), 1)["animal"] == "G20-3"

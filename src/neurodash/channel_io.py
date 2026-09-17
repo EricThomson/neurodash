@@ -173,7 +173,14 @@ def _saved_animal(data, bank):
     per_bank = data.get("animal_overrides") or {}
     if per_bank:
         return per_bank.get(str(bank), "")
-    if data.get("bank") == bank:
+    # A scalar override with NO bank recorded was typed before any channel group
+    # was chosen, which is the ordinary order: load the .pl2, name the animal,
+    # then pick its channels. There is no other group it could belong to, so it
+    # shows for whichever is selected now and the next save files it under that
+    # one. Reading this as "belongs to no bank, therefore to none of them" made
+    # the name vanish the moment a group was picked, and the save that followed
+    # then wiped it from disk.
+    if data.get("bank") in (bank, None):
         return data.get("animal_override", "")
     return ""
 
@@ -203,8 +210,12 @@ def save_identity(pl2_path, animal="", session="", bank=None, no_shock=None):
         # not leak onto the other animal.
         per_bank = dict(data.get("animal_overrides") or {})
         legacy_bank, legacy_name = data.get("bank"), data.get("animal_override")
-        if not per_bank and legacy_name and legacy_bank is not None:
-            per_bank[str(legacy_bank)] = legacy_name
+        if not per_bank and legacy_name:
+            # No recorded bank means it was typed before a group was chosen, so it
+            # belongs to the group being chosen now. The scalar is cleared below,
+            # so a name not migrated here is a name destroyed.
+            owner = legacy_bank if legacy_bank is not None else int(bank)
+            per_bank[str(owner)] = legacy_name
         per_bank[str(int(bank))] = canonical_id(animal)
         data["animal_overrides"] = per_bank
         # Ambiguous once there is more than one animal — the dict is the answer.
